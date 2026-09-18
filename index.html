@@ -1,0 +1,3278 @@
+<!DOCTYPE html>
+<!--
+  EXIT LIQUIDITY — Tier 1
+  ========================
+  The tutorial tier, complete. Four dull stocks, one position slot, market
+  orders, charts, ticker search and sort, one brokerage, one bank, mail, and
+  the calendar. Tier 1 hides the world rather than disabling it: there are no
+  greyed-out entries and no "unlocks later" labels anywhere in this file.
+
+  Two things worth knowing before reading on.
+
+  1. The page is NOT rebuilt on every tick. A tick fires every three seconds,
+     and rebuilding the DOM that often destroys open dropdowns and steals
+     focus mid-keystroke. Instead, elements that change carry a data-lv
+     attribute and liveUpdate() rewrites just those. Full render() happens on
+     navigation and on player actions only.
+
+  2. One self-contained file, because it has to open from a local disk and run
+     inside a cross-origin iframe, neither of which tolerates module imports.
+
+  Order below: CONFIG / DATA / ENGINE / MAIL / SITES / CHARTS / SHELL / BOOT.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exit Liquidity</title>
+<style>
+/* ===========================================================================
+   Browser chrome — modern, quiet, gets out of the way.
+   ======================================================================== */
+:root{
+  --bg:#dee1e6; --bar:#fff; --line:#e3e5e8; --line2:#d3d6da;
+  --ink:#202124; --ink2:#5f6368; --accent:#1a73e8;
+  --up:#137333; --down:#c5221f; --flat:#5f6368;
+  --ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Mono","Segoe UI Mono",Menlo,Consolas,monospace;
+  --r:8px;
+}
+*{box-sizing:border-box}
+html,body{height:100%}
+body{
+  margin:0;background:#202124;color:var(--ink);
+  font:13px/1.45 var(--ui);overflow:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+.num{font-family:var(--mono);font-variant-numeric:tabular-nums;letter-spacing:-.2px}
+.r{text-align:right}
+.up{color:var(--up)}.down{color:var(--down)}.flat{color:var(--flat)}
+.muted{color:var(--ink2)}
+.small{font-size:11.5px}
+.hidden{display:none !important}
+
+button{
+  font:13px var(--ui);color:var(--ink);background:#f1f3f4;border:1px solid transparent;
+  padding:6px 14px;border-radius:6px;cursor:pointer;transition:background .12s;
+}
+button:hover:not(:disabled){background:#e4e6e9}
+button:active:not(:disabled){background:#d9dbdf}
+button:disabled{color:#b0b3b8;cursor:default;background:#f6f7f8}
+button.primary{background:var(--accent);color:#fff}
+button.primary:hover:not(:disabled){background:#1765cc}
+button.primary:disabled{background:#c3d7f5;color:#fff}
+input,select{
+  font:13px var(--ui);color:var(--ink);background:#fff;
+  border:1px solid var(--line2);border-radius:6px;padding:6px 9px;outline:none;
+}
+input:focus,select:focus{border-color:var(--accent);box-shadow:0 0 0 2px rgba(26,115,232,.15)}
+input.num{font-family:var(--mono)}
+
+/* ---- window ---- */
+#browser{
+  position:fixed;inset:0;display:flex;flex-direction:column;background:var(--bg);
+}
+
+/* tab strip */
+.tabstrip{display:flex;align-items:flex-end;gap:2px;padding:8px 8px 0;height:44px;flex:none}
+.tab{
+  display:flex;align-items:center;gap:8px;height:36px;padding:0 14px;
+  background:#c8ccd1;border-radius:10px 10px 0 0;font-size:12.5px;color:#3c4043;
+  max-width:240px;min-width:120px;overflow:hidden;white-space:nowrap;cursor:default;
+}
+.tab .fav{width:15px;height:15px;border-radius:4px;background:#8b9096;flex:none;
+  font:700 9px var(--ui);color:#fff;display:flex;align-items:center;justify-content:center}
+.tab .lbl{overflow:hidden;text-overflow:ellipsis}
+.tab.on{background:var(--bar);color:var(--ink);font-weight:500}
+.tab.on .fav{background:var(--accent)}
+.tabstrip .newtab{width:28px;height:28px;border-radius:50%;background:transparent;
+  display:flex;align-items:center;justify-content:center;color:#5f6368;font-size:17px;margin-bottom:4px}
+
+/* toolbar */
+.toolbar{display:flex;align-items:center;gap:6px;padding:7px 10px;background:var(--bar);flex:none}
+.iconbtn{width:30px;height:30px;border-radius:50%;background:transparent;padding:0;
+  display:flex;align-items:center;justify-content:center;color:#5f6368;font-size:14px;border:0}
+.iconbtn:hover:not(:disabled){background:#f1f3f4}
+.omni{flex:1;display:flex;align-items:center;gap:8px;background:#f1f3f4;border-radius:18px;
+  padding:0 14px;height:32px;border:1px solid transparent}
+.omni:focus-within{background:#fff;border-color:#d3d6da;box-shadow:0 1px 6px rgba(32,33,36,.18)}
+.omni .lock{color:#5f6368;font-size:11px;flex:none}
+.omni input{flex:1;border:0;background:transparent;padding:0;font-size:13px;
+  font-family:var(--mono);color:var(--ink);box-shadow:none}
+.omni input:focus{box-shadow:none;border:0}
+.repchip{display:flex;align-items:center;gap:6px;background:#f1f3f4;border-radius:16px;
+  padding:5px 12px;font-size:12px;color:var(--ink2);white-space:nowrap}
+.repchip b{color:var(--ink);font-family:var(--mono);font-size:12.5px}
+
+/* bookmarks */
+.bookmarks{display:flex;align-items:center;gap:2px;padding:0 10px 7px;background:var(--bar);
+  border-bottom:1px solid var(--line);flex:none;overflow-x:auto;scrollbar-width:none}
+.bookmarks::-webkit-scrollbar{display:none}
+.bm{display:flex;align-items:center;gap:7px;padding:5px 9px;border-radius:6px;
+  font-size:12px;color:#3c4043;white-space:nowrap;cursor:default}
+.bm:hover{background:#f1f3f4}
+.bm .fav{width:14px;height:14px;border-radius:3px;flex:none;
+  font:700 8px var(--ui);color:#fff;display:flex;align-items:center;justify-content:center}
+.bm .dot{width:7px;height:7px;border-radius:50%;background:var(--accent);flex:none}
+
+/* ticker tape */
+.tape{overflow:hidden;background:#202124;height:26px;flex:none;position:relative}
+.tape .run{position:absolute;white-space:nowrap;font-family:var(--mono);font-size:11.5px;
+  line-height:26px;color:#9aa0a6;will-change:transform}
+.tape .sym{color:#e8eaed;font-weight:600}
+.tape .u{color:#81c995}.tape .d{color:#f28b82}
+
+#viewport{flex:1;overflow:auto;background:#fff}
+
+/* status bar */
+.statusbar{display:flex;align-items:center;gap:0;background:#f1f3f4;border-top:1px solid var(--line);
+  padding:0 12px;height:26px;font-size:11.5px;color:var(--ink2);flex:none}
+.statusbar .cell{padding:0 12px 0 0;margin-right:12px;border-right:1px solid var(--line2);line-height:26px}
+.statusbar .cell:last-child{border:0;margin:0}
+.statusbar .grow{flex:1;border:0}
+.dotlive{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--up);margin-right:6px}
+.dotlive.shut{background:#9aa0a6}
+
+/* ===========================================================================
+   Shared site furniture
+   ======================================================================== */
+.site{min-height:100%}
+a,.lnk{color:var(--accent);text-decoration:none;cursor:pointer}
+a:hover,.lnk:hover{text-decoration:underline}
+
+table{border-collapse:collapse;width:100%}
+th{text-align:left;font-weight:600;font-size:11px;letter-spacing:.4px;text-transform:uppercase;
+  color:var(--ink2);padding:8px 12px;border-bottom:1px solid var(--line2);white-space:nowrap}
+td{padding:9px 12px;border-bottom:1px solid var(--line);white-space:nowrap;font-size:13px}
+tr.row{cursor:pointer}
+tr.row:hover{background:#f8f9fa}
+
+.card{background:#fff;border:1px solid var(--line);border-radius:var(--r);margin-bottom:14px;overflow:hidden}
+.card>h3{margin:0;font-size:12px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;
+  color:var(--ink2);padding:11px 15px;border-bottom:1px solid var(--line)}
+.card>.body{padding:15px}
+/* -- news feed -- */
+.tagpill{display:inline-block;font:700 9.5px var(--ui);letter-spacing:.9px;padding:3px 8px;
+  border-radius:3px;text-transform:uppercase;vertical-align:middle}
+.tagpill.brk{background:#c5221f;color:#fff}
+.tagpill.imp{background:#0f2440;color:#fff}
+.tagpill.sm{font-size:8.5px;padding:2px 6px;margin-right:7px}
+.quill .navbar span.lnk{color:var(--ink2);cursor:pointer;text-decoration:none}
+.quill .navbar span.lnk:hover{color:var(--ink)}
+.quill .navbar span.lnk.on{color:var(--ink);box-shadow:inset 0 -2px 0 var(--ink)}
+.lead{max-width:680px;padding-bottom:20px;margin-bottom:8px;border-bottom:2px solid var(--ink);cursor:pointer}
+.lead h2{font:400 30px var(--serif);letter-spacing:-.6px;margin:8px 0 5px;line-height:1.2}
+.lead:hover h2{color:var(--accent)}
+.lead p{font:15px/1.6 var(--serif);color:#3c4043;margin:10px 0 0}
+.feed{max-width:680px}
+.storyrow{padding:14px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.storyrow .hd{font:600 15px var(--ui);letter-spacing:-.2px}
+.storyrow:hover .hd{color:var(--accent)}
+.storyrow.fresh .hd::after{content:"";display:inline-block;width:6px;height:6px;border-radius:50%;
+  background:var(--accent);margin-left:8px;vertical-align:middle}
+.storyrow .meta{font-size:11.5px;color:var(--ink2);margin-top:4px}
+.fillerrow{display:flex;gap:12px;align-items:baseline;padding:7px 0;
+  border-bottom:1px solid var(--line);cursor:pointer;font-size:12px;color:#80868b}
+.fillerrow .src{width:170px;flex:none;font-size:10.5px;letter-spacing:.2px}
+.fillerrow .hd{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fillerrow .tm{font-size:10.5px}
+.fillerrow:hover{color:var(--ink2)}
+
+.ranges{display:flex;gap:3px;padding:8px 12px 0}
+.rg{padding:4px 12px;border-radius:14px;font-size:11.5px;font-weight:600;letter-spacing:.3px;
+  background:transparent;color:var(--ink2);border:0}
+.rg:hover:not(.on){background:#f1f3f4}
+.rg.on{background:#e8f0fe;color:var(--accent)}
+.chartwrap{padding:4px 10px 10px}
+.chartwrap canvas{cursor:crosshair}
+.idxstrip{display:flex;gap:0;border-bottom:1px solid var(--line);background:#fff;overflow-x:auto}
+.idxcell{padding:11px 22px;border-right:1px solid var(--line);cursor:pointer;white-space:nowrap;min-width:190px}
+.idxcell:hover{background:#f8f9fa}
+.idxcell .nm{font-size:11px;font-weight:600;letter-spacing:.3px;text-transform:uppercase;color:var(--ink2)}
+.idxcell .vv{margin-top:3px;display:flex;gap:9px;align-items:baseline}
+.idxcell .vv .num:first-child{font-size:16px;font-weight:600;letter-spacing:-.4px}
+.hot{display:inline-block;font:700 8.5px var(--ui);letter-spacing:.7px;padding:1px 5px;
+  border-radius:3px;background:#7b1fa2;color:#fff;vertical-align:middle;margin-left:4px}
+button.mini{padding:3px 10px;font-size:11.5px;border-radius:5px}
+
+.err{background:#fce8e6;border-radius:6px;color:#c5221f;padding:9px 12px;margin-top:11px;font-size:12.5px}
+.ok{background:#e6f4ea;border-radius:6px;color:#137333;padding:9px 12px;margin-top:11px;font-size:12.5px}
+
+/* -- portal -- */
+.portal{background:#f8f9fa;min-height:100%}
+.portal .masthead{background:#fff;border-bottom:1px solid var(--line);padding:20px 28px}
+.portal .masthead h1{margin:0;font:600 22px var(--ui);letter-spacing:-.6px}
+.portal .masthead .tagline{font-size:12.5px;color:var(--ink2);margin-top:2px}
+.portal .cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(285px,1fr));
+  gap:14px;padding:20px 28px;align-items:start}
+.cal{width:100%;border-collapse:separate;border-spacing:4px}
+.cal td{text-align:center;border:1px solid var(--line);border-radius:6px;padding:9px 0;
+  font-family:var(--mono);font-size:12px;color:var(--ink2)}
+.cal td.today{background:var(--accent);color:#fff;border-color:var(--accent);font-weight:600}
+.cal td.past{color:#bdc1c6;background:#fafafa}
+
+/* -- Quill Street -- */
+.quill{background:#fff}
+.quill .masthead{border-bottom:1px solid var(--line);padding:22px 28px 16px;text-align:left}
+.quill .masthead h1{margin:0;font:400 30px var(--serif);letter-spacing:-.5px;color:#111}
+.quill .masthead .sub{font:italic 12.5px var(--serif);color:var(--ink2);margin-top:3px}
+.quill .navbar{border-bottom:1px solid var(--line);padding:0 28px;display:flex;gap:24px}
+.quill .navbar span{padding:11px 0;font-size:11.5px;letter-spacing:.7px;font-weight:600;
+  color:var(--ink2);text-transform:uppercase}
+.quill .navbar span.on{color:var(--ink);box-shadow:inset 0 -2px 0 var(--ink)}
+.quill .wrap{padding:20px 28px 40px}
+.quill .toolrow{display:flex;gap:9px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.quill article{font:16px/1.65 var(--serif);max-width:640px;color:#202124}
+.quill article h3{font:600 15px var(--ui);margin:0 0 3px;letter-spacing:-.2px}
+.quill .byline{font:italic 12.5px var(--serif);color:var(--ink2);margin-bottom:14px;
+  padding-bottom:11px;border-bottom:1px solid var(--line)}
+
+/* -- Tugmore -- */
+.tug{background:#f8f9fa;min-height:100%}
+.tug .bar{background:#0b3d6b;color:#fff;padding:14px 24px;display:flex;align-items:baseline;gap:12px}
+.tug .bar b{font-size:17px;font-weight:600;letter-spacing:-.3px}
+.tug .bar .sm{font-size:11.5px;color:#9fc0dd}
+.tug .tabs{display:flex;background:#fff;border-bottom:1px solid var(--line);padding:0 24px;gap:26px}
+.tug .tabs div{padding:12px 0;font-size:13px;color:var(--ink2);font-weight:500}
+.tug .tabs div.on{color:var(--accent);box-shadow:inset 0 -2px 0 var(--accent)}
+.tug .grid{display:grid;grid-template-columns:200px minmax(340px,1fr) 250px;
+  gap:14px;padding:20px 24px 40px;align-items:start}
+@media (max-width:1080px){.tug .grid{grid-template-columns:1fr}}
+.tug .navlist div{padding:9px 15px;border-bottom:1px solid var(--line);font-size:12.5px;cursor:pointer}
+.tug .navlist div:last-child{border:0}
+.tug .navlist div:hover{background:#f8f9fa}
+.tug .navlist div.on{background:#e8f0fe;color:var(--accent);font-weight:600}
+.tug .ticket label{display:block;margin:13px 0 5px;font-size:11px;font-weight:600;
+  letter-spacing:.4px;text-transform:uppercase;color:var(--ink2)}
+.tug .ticket label:first-child{margin-top:0}
+.tug .ticket input,.tug .ticket select{width:100%}
+.tug .big{font:600 32px var(--mono);letter-spacing:-1.5px}
+.tug .quote-row{display:flex;gap:18px;align-items:baseline;padding:15px;flex-wrap:wrap;
+  border-bottom:1px solid var(--line)}
+.tug .bidask{font-family:var(--mono);font-size:12px;color:var(--ink2)}
+.tug .statline{padding:9px 15px;font-size:11.5px;color:var(--ink2);font-family:var(--mono)}
+
+/* -- bank -- */
+.ckh{background:#faf8f3;min-height:100%}
+.ckh .crest{background:#0f2440;color:#d9bd74;padding:22px 28px;display:flex;align-items:center;gap:15px}
+.ckh .crest .seal{width:44px;height:44px;border:2px solid #d9bd74;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;font:600 14px var(--serif);flex:none}
+.ckh .crest h1{margin:0;font:400 20px var(--serif);letter-spacing:2.5px}
+.ckh .crest .est{font-size:10px;color:#9d894f;letter-spacing:3px;margin-top:3px}
+.ckh .wrap{padding:24px 28px;max-width:600px}
+.ckh .photo{background:#efe9dc;border:1px solid #e0d8c6;border-radius:var(--r);padding:34px;
+  text-align:center;font:italic 12.5px var(--serif);color:#9c9274;margin-top:14px}
+
+/* -- mail -- */
+.mail{display:flex;flex-direction:column;height:100%;min-height:100%;background:#fff}
+.mail .hdr{padding:15px 22px;border-bottom:1px solid var(--line);display:flex;
+  justify-content:space-between;align-items:baseline;gap:12px;flex:none}
+.mail .hdr b{font-size:16px;font-weight:600;letter-spacing:-.3px}
+.mail .split{display:grid;grid-template-columns:330px 1fr;flex:1;min-height:0}
+@media (max-width:820px){.mail .split{grid-template-columns:1fr}}
+.mail .list{border-right:1px solid var(--line);overflow-y:auto}
+.mail .list .msg{padding:12px 18px;border-bottom:1px solid var(--line);cursor:pointer}
+.mail .list .msg:hover{background:#f8f9fa}
+.mail .list .msg.on{background:#e8f0fe}
+.mail .list .msg .from{display:flex;justify-content:space-between;gap:9px;align-items:center;
+  font-size:12.5px;color:var(--ink2)}
+.mail .list .msg.unread .from{color:var(--ink);font-weight:600}
+.mail .list .msg .subj{font-size:13px;margin-top:3px;overflow:hidden;text-overflow:ellipsis}
+.mail .list .msg.unread .subj{font-weight:600}
+.mail .list .msg .dot{display:inline-block;width:7px;height:7px;border-radius:50%;
+  background:var(--accent);flex:none;margin-right:5px}
+.mail .read{padding:24px 30px 40px;overflow-y:auto}
+.mail .read .mh{border-bottom:1px solid var(--line);padding-bottom:14px;margin-bottom:18px}
+.mail .read .mh h2{margin:0 0 5px;font:600 19px var(--ui);letter-spacing:-.4px}
+.mail .read .mh .meta{font-size:12px;color:var(--ink2);font-family:var(--mono)}
+.mail .read .bd{font:15px/1.7 var(--serif);max-width:620px;color:#202124}
+.mail .read .bd p{margin:0 0 15px}
+.mail .read .actions{margin-top:22px;padding-top:18px;border-top:1px solid var(--line)}
+
+/* -- checklist -- */
+.chk{background:#fef7e0;border:1px solid #f5e0a3;border-radius:var(--r);padding:14px 18px;margin:20px 28px}
+.chk h3{margin:0 0 9px;font-size:11px;font-weight:600;letter-spacing:.5px;
+  text-transform:uppercase;color:#8a6d00}
+.chk ol{margin:0;padding-left:20px;font-size:12.5px;color:#5f4c00}
+.chk li{padding:2px 0}
+.chk li.done{color:#b0a37a;text-decoration:line-through}
+
+/* -- modal -- */
+.veil{position:fixed;inset:0;background:rgba(32,33,36,.55);display:flex;align-items:center;
+  justify-content:center;z-index:50;padding:20px}
+.dlg{background:#fff;border-radius:12px;min-width:340px;max-width:560px;width:100%;
+  box-shadow:0 12px 44px rgba(0,0,0,.32);overflow:hidden}
+.dlg .tb{font-size:17px;font-weight:600;letter-spacing:-.3px;padding:22px 26px 0}
+.dlg .bd{padding:14px 26px 0;font-size:13.5px;line-height:1.6}
+.dlg .bd p{margin:0 0 12px}
+.dlg .ft{padding:18px 26px 22px;display:flex;gap:9px;justify-content:flex-end}
+.dlg dl{margin:0;display:grid;grid-template-columns:auto 1fr;gap:9px 20px;
+  padding:14px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
+.dlg dt{color:var(--ink2);font-size:12.5px}
+.dlg dd{margin:0;text-align:right;font-family:var(--mono);font-size:13px}
+textarea{width:100%;height:74px;font:11px var(--mono);border:1px solid var(--line2);
+  border-radius:6px;padding:9px;resize:vertical;outline:none}
+textarea:focus{border-color:var(--accent)}
+canvas{display:block;max-width:100%}
+</style>
+</head>
+<body>
+
+<div id="browser">
+
+  <div class="tabstrip" id="tabstrip"></div>
+
+  <div class="toolbar">
+    <button class="iconbtn" id="nav-back" title="Back">&#8592;</button>
+    <button class="iconbtn" id="nav-fwd" title="Forward">&#8594;</button>
+    <button class="iconbtn" id="nav-reload" title="Reload">&#8635;</button>
+    <div class="omni">
+      <span class="lock">&#128274;</span>
+      <input id="addr" spellcheck="false" autocomplete="off">
+    </div>
+    <div class="repchip" title="Your standing. Visible at all times.">
+      Reputation <b id="repval">10.0</b>
+    </div>
+    <button class="iconbtn" id="btn-menu" title="Game menu">&#8942;</button>
+  </div>
+
+  <div class="bookmarks" id="bookmarks"></div>
+  <div class="tape"><div class="run" id="tape"></div></div>
+  <div id="viewport"></div>
+
+  <div class="statusbar">
+    <div class="cell"><span class="dotlive" id="st-dot"></span><span id="st-phase">—</span></div>
+    <div class="cell num" id="st-clock">—</div>
+    <div class="cell" id="st-date">—</div>
+    <div class="cell grow" id="st-hint"></div>
+    <div class="cell" id="st-ver"></div>
+  </div>
+</div>
+
+<div id="modal-root"></div>
+
+<script>
+"use strict";
+/* ===========================================================================
+   1. CONFIG — every balance number in tier 1 lives here.
+   ======================================================================== */
+const CONFIG = {
+  version: "0.3.0",
+
+  mode: "normal",
+  modes: {
+    normal: { startCash: 500, startRep: 10 },
+    hard:   { startCash: 100, startRep: 0  },
+  },
+
+  // Time. A business day is 200 ticks. Ten real minutes at 3s a tick.
+  ticksPerDay: 200,
+  tickMs: 3000,
+  openMinute: 9 * 60 + 30,
+  closeMinute: 16 * 60,
+
+  // Calendar. 40 trading days a year, four quarters of ten.
+  daysPerQuarter: 10,
+  daysPerYear: 40,
+  epochYear: 2026,        // the calendar year day 1 falls in
+
+  // Market. Per-tick figures are derived from the daily ones, so the daily
+  // numbers stay the ones worth tuning.
+  dailyMarketVol: 0.006,
+  dailyMarketDrift: 0.0010,
+  dailySectorVol: 0.005,
+  earlyBullTilt: 0.0025,        // hidden; fades once the tiers open up
+  jumpChancePerTick: 0.00035,
+  jumpSize: 0.010,
+  overnightGapVol: 0.004,
+
+  // Execution. You buy at the ask and sell at the bid. The spread is the
+  // quiet cost of changing your mind too often.
+  spreadFloor: 0.0006,
+  // commission lives on each brokerage now, not here
+  maxFloatFraction: 0.02,
+
+  slots: 1,
+  startTier: 1,
+  universeSize: 100,
+  starterTickers: ["IVS","MFP","BRC","ALP"],   // all tier 1 ever shows
+  saveKey: "exitliquidity.save.v1",
+
+  // Charting
+  sessionsKept: 6,        // days of tick-level history retained per asset
+  chartMaxPoints: 720,    // downsample target; roughly one point per pixel
+
+  // News. Delay and life are in ticks, so a story lands minutes to hours after
+  // it prints and plays out over the rest of the day or into the next one.
+  storiesPerDay: 3,
+  companyStoriesPerDay: 3,
+  fillerPerDay: 5,
+  newsDelayMin: 4,
+  newsDelayMax: 40,
+  newsLifeMin: 90,
+  newsLifeMax: 320,
+  newsInversionChance: 0.14,   // reading it right is not the same as being right
+};
+
+/* ===========================================================================
+   2. DATA — the four starting names.
+   Boring on purpose. Played straight: the humour lives in the banks.
+   ======================================================================== */
+const SECTORS = {
+  materials:  { name:"Basic Materials",    beta:0.95 },
+  energy:     { name:"Energy",             beta:1.05 },
+  staples:    { name:"Consumer Staples",   beta:0.65 },
+  utilities:  { name:"Utilities",          beta:0.55 },
+  industrials:{ name:"Industrials",        beta:1.00 },
+  transport:  { name:"Transport",          beta:1.05 },
+  technology: { name:"Technology",         beta:1.30 },
+  healthcare: { name:"Health Care",        beta:0.85 },
+  financials: { name:"Financials",         beta:1.10 },
+  discretion: { name:"Consumer Cyclical",  beta:1.15 },
+  realestate: { name:"Real Estate",        beta:0.90 },
+  telecom:    { name:"Communications",     beta:0.80 },
+  ai:         { name:"Artificial Intelligence", beta:1.55 },
+};
+
+/* Roles are what news actually targets. A company can hold several. This is
+   the whole reason a story about distillate stocks can move nine companies
+   across four sectors without naming any of them. */
+const ROLES = ["ai_chips","ai_software","ai_infra",
+  "steel","mining","chemicals","refining","oil_producer","utility",
+  "food_distribution","food_producer","retail_grocery","retail_discretionary",
+  "rail","trucking","airline","construction","automotive","defense",
+  "semis","software","pharma","bank","reit","telecom","media","insurer"];
+
+const ANCHORS = [
+  { ticker:"IVS", roles:["steel"], name:"Ironvale Steel", sector:"materials",
+    price:34.20, beta:1.05, vol:0.011, drift:0.0002, div:3.2,
+    float:48e6, employees:11400, hq:"Gary, Indiana", ceo:"D. Hollingsworth",
+    founded:1921, liquidity:0.85,
+    desc:"Ironvale Steel operates four integrated mills producing hot-rolled coil, structural "+
+         "beam and reinforcing bar for construction and automotive customers. Roughly two thirds "+
+         "of shipments go to domestic buyers under annual contracts; the balance is sold at spot. "+
+         "Input costs are dominated by iron ore, scrap and electricity, and margins move with all three." },
+
+  { ticker:"MFP", roles:["refining"], name:"Marchfield Petrol", sector:"energy",
+    price:61.85, beta:1.10, vol:0.013, drift:0.0003, div:4.1,
+    float:31e6, employees:6900, hq:"Tulsa, Oklahoma", ceo:"R. Aunspaugh",
+    founded:1948, liquidity:0.80,
+    desc:"Marchfield Petrol refines crude into gasoline, diesel and asphalt at two mid-continent "+
+         "refineries and distributes through a network of 340 branded forecourts. Earnings track "+
+         "the crack spread rather than the oil price itself, so a cheaper barrel is not "+
+         "automatically good news and a dearer one is not automatically bad." },
+
+  { ticker:"BRC", roles:["food_distribution"], name:"Brandt & Coyle", sector:"staples",
+    price:27.40, beta:0.70, vol:0.008, drift:0.0002, div:2.8,
+    float:62e6, employees:19200, hq:"Springfield, Missouri", ceo:"M. Okonjo",
+    founded:1897, liquidity:0.90,
+    desc:"Brandt & Coyle is a food distributor. It buys shelf-stable groceries, dairy and frozen "+
+         "goods in bulk and delivers them to independent supermarkets, schools and hospitals across "+
+         "nineteen states. It does not make anything. Margins are thin, volumes are enormous, and "+
+         "the business is unusually sensitive to diesel prices and to the cost of the food itself." },
+
+  { ticker:"ALP", roles:["utility"], name:"Aldwin Power", sector:"utilities",
+    price:48.15, beta:0.50, vol:0.006, drift:0.0001, div:4.6,
+    float:74e6, employees:4100, hq:"Harrisburg, Pennsylvania", ceo:"T. Vasquez",
+    founded:1906, liquidity:0.95,
+    desc:"Aldwin Power generates and distributes electricity to 1.1 million regulated customers. "+
+         "Rates are set by a state commission in multi-year cases, which caps how good a year can "+
+         "be and cushions how bad one can get. The dividend has been raised in each of the last "+
+         "thirty-one years, a fact the investor relations page mentions twice." },
+];
+
+/* ---------------------------------------------------------------------------
+   THE INDICES
+
+   Three benchmarks, each measuring something different, which is the whole
+   reason to have three. The broad one is the market. The industrial one is
+   price-weighted and full of old-economy names, so a single expensive share
+   swings it more than a large company does. The composite is technology and
+   AI weighted, so it is the one that rips and the one that breaks.
+
+   Not tradable yet. Index ETFs are a tier 2 asset class and arrive with the
+   rest of the funds.
+   ------------------------------------------------------------------------ */
+const INDICES = {
+  STR: { id:"STR", symbol:"$STR", name:"Sterling 500", base:5800,
+         since:1957, sinceValue:44, flavor:"broad",
+         weight:"cap", blurb:"Every listed company, weighted by market value. This is the market.",
+         member: () => true },
+  BIA: { id:"BIA", symbol:"$BIA", name:"Brackford Industrial Average", base:42000,
+         since:1896, sinceValue:41, flavor:"old",
+         weight:"price", limit:30,
+         blurb:"Thirty established names, weighted by share price rather than by size — an accident of history nobody has fixed.",
+         member: a => ["materials","industrials","energy","staples","utilities","transport","financials","telecom"]
+                        .includes(a.sector) },
+  VSD: { id:"VSD", symbol:"$VSDQ", name:"Vasdaq Composite", base:19000,
+         since:1971, sinceValue:100, flavor:"tech",
+         weight:"cap",
+         blurb:"Technology and artificial intelligence. The one that rips, and the one that breaks.",
+         member: a => a.sector === "technology" || a.sector === "ai" },
+};
+
+const MONTHS = ["January","February","March","April","May","June",
+                "July","August","September","October","November","December"];
+
+/* ===========================================================================
+   2b. THE UNIVERSE GENERATOR
+
+   Company names are not written by hand and never should be. They come out of
+   word pools, deterministically from the world seed, so the same seed always
+   produces the same hundred companies and a save is still a seed plus a day
+   counter.
+
+   Names take three shapes, per the design: one word, word plus descriptor, or
+   two surnames. Tickers derive from the name properly rather than at random —
+   multi-word names use initials, one-word names compress to their strongest
+   consonants — and collisions resolve by extending a letter.
+
+   Nothing here is a joke. Scanning a hundred tickers by sector is work, and a
+   pun in every name fights the information the player is trying to read. The
+   humour belongs to the banks and the brokerages.
+   ======================================================================== */
+
+const ROOTS = [
+  "Ironvale","Corvale","Nexhelm","Marchfield","Aldwin","Vantia","Kesterly","Thorne",
+  "Welbeck","Draycott","Fenwick","Garrow","Halloway","Ingersoll","Jarrow","Kemble",
+  "Lanyon","Merrow","Norbury","Ottley","Pemberton","Quarles","Redmayne","Stanbury",
+  "Tarrant","Underhill","Vexley","Wharton","Yardley","Ashcombe","Bexhill","Calloway",
+  "Denbigh","Ellerby","Fairhurst","Greenhalgh","Harkness","Illingworth","Jessop",
+  "Kirkbride","Langdale","Mowbray","Netherby","Orrell","Padgett","Rushworth","Selby",
+  "Trensham","Ulverston","Vardon","Winstanley","Aldergate","Bramhall","Cotgrave",
+  "Dunmore","Eastleigh","Follingsby","Goswell","Hathersage","Ilkeston","Kelsall",
+  "Loxley","Mattersey","Newbold","Oakmere","Parbold","Rainford","Sandbach","Tatterhall",
+  "Ampleforth","Blaycourt","Chettle","Darnley","Everleigh","Foxton","Girvan","Hendrey",
+  "Inskip","Jerrold","Kinnaird","Larkhill","Maplebeck","Northrop","Ossington","Pelsall",
+];
+
+const SURNAMES = [
+  "Brandt","Coyle","Hollis","Rand","Mercer","Falk","Vance","Doyle","Keane","Strand",
+  "Amory","Blythe","Cardew","Dunn","Ellis","Frayne","Gorse","Haldane","Ivory","Jute",
+  "Kelso","Lisle","Mabry","Naylor","Orde","Pike","Quill","Rowe","Sable","Thorpe",
+];
+
+/* Descriptor and business model per sector. Descriptions are assembled from
+   these rather than written one by one. */
+const SECTOR_KIT = {
+  materials: { desc:["Steel","Metals","Mining","Chemical","Materials","Alloys","Industries"],
+    roles:[["steel"],["mining"],["chemicals"]], vol:[.009,.014], drift:[.0001,.0004], div:[1.8,3.6],
+    lines:["operates {n} production sites turning raw {input} into {output} for industrial customers",
+           "extracts and processes {input}, selling into contract and spot markets in roughly equal measure",
+           "produces specialty {output} used in construction, packaging and automotive applications"] },
+  energy: { desc:["Petrol","Energy","Resources","Refining","Petroleum","Gas"],
+    roles:[["refining"],["oil_producer"],["refining","chemicals"]], vol:[.012,.018], drift:[.0001,.0004], div:[2.4,4.8],
+    lines:["refines crude into fuels and petrochemical feedstock at {n} facilities",
+           "explores for and produces oil and natural gas across {n} basins",
+           "operates midstream pipelines and storage terminals under long-term contracts"] },
+  staples: { desc:["Foods","Grocers","Provisions","Brands","Products","Distribution"],
+    roles:[["food_distribution"],["food_producer"],["retail_grocery"]], vol:[.006,.010], drift:[.0001,.0003], div:[2.2,4.0],
+    lines:["distributes shelf-stable groceries, dairy and frozen goods to institutional buyers",
+           "manufactures packaged foods and household products sold under {n} brands",
+           "operates {n} supermarkets concentrated in secondary markets"] },
+  utilities: { desc:["Power","Electric","Utilities","Energy","Light"],
+    roles:[["utility"]], vol:[.005,.008], drift:[.0000,.0002], div:[3.4,5.2],
+    lines:["generates and distributes electricity to regulated customers under multi-year rate cases",
+           "provides regulated gas and electric service, with rates set by a state commission",
+           "owns transmission assets and contracted generation across {n} states"] },
+  industrials: { desc:["Industries","Engineering","Manufacturing","Works","Systems","Equipment"],
+    roles:[["construction"],["defense"],["automotive"]], vol:[.009,.014], drift:[.0002,.0005], div:[1.2,2.8],
+    lines:["builds heavy equipment for construction and resource extraction",
+           "supplies components and subsystems to prime defence contractors",
+           "manufactures industrial machinery, with aftermarket parts a majority of profit"] },
+  transport: { desc:["Freight","Logistics","Transport","Rail","Lines","Carriers"],
+    roles:[["rail"],["trucking"],["airline"]], vol:[.010,.015], drift:[.0002,.0005], div:[1.0,2.6],
+    lines:["operates {n} route miles of freight railroad carrying bulk commodities and intermodal",
+           "runs a truckload and less-than-truckload fleet across {n} terminals",
+           "operates a regional airline under capacity purchase agreements"] },
+  technology: { desc:["Compute","Systems","Technologies","Semiconductor","Data","Logic","Software"],
+    roles:[["semis"],["software"]], vol:[.016,.026], drift:[.0004,.0011], div:[0,0.9],
+    lines:["designs and fabricates logic and memory devices for data centre customers",
+           "licenses enterprise software on subscription, with renewals the bulk of revenue",
+           "supplies capital equipment used in semiconductor fabrication"] },
+  healthcare: { desc:["Therapeutics","Health","Pharma","Biosciences","Medical","Labs"],
+    roles:[["pharma"]], vol:[.013,.021], drift:[.0002,.0007], div:[0,2.4],
+    lines:["develops and markets therapies, with {n} products in late-stage trials",
+           "manufactures generic pharmaceuticals and injectables for hospital customers",
+           "operates clinical laboratories and diagnostic testing networks"] },
+  financials: { desc:["Bancorp","Financial","Capital","Trust","Assurance","Holdings"],
+    roles:[["bank"],["insurer"]], vol:[.009,.014], drift:[.0001,.0004], div:[2.0,4.2],
+    lines:["operates {n} branches, funding a commercial loan book with retail deposits",
+           "underwrites property and casualty insurance, with investment income a large share of profit",
+           "provides asset management and custody services to institutional clients"] },
+  discretion: { desc:["Motors","Retail","Stores","Leisure","Group","Brands"],
+    roles:[["retail_discretionary"],["automotive"]], vol:[.011,.018], drift:[.0002,.0006], div:[0.6,2.6],
+    lines:["operates {n} specialty retail stores and a growing direct channel",
+           "assembles vehicles and light trucks, with financing a separate profit centre",
+           "runs restaurants and leisure venues, mostly franchised"] },
+  realestate: { desc:["Properties","Realty","Estates","Trust","Holdings"],
+    roles:[["reit"]], vol:[.008,.013], drift:[.0000,.0003], div:[3.2,5.6],
+    lines:["owns and leases {n} industrial and logistics properties",
+           "owns regional shopping centres and mixed-use developments",
+           "develops and manages office space in secondary business districts"] },
+  telecom: { desc:["Communications","Networks","Media","Broadcasting","Telecom"],
+    roles:[["telecom"],["media"]], vol:[.008,.014], drift:[.0000,.0004], div:[1.8,4.6],
+    lines:["provides wireline and wireless service across {n} markets",
+           "owns broadcast stations and a syndication library",
+           "operates fibre backhaul and data centre interconnection"] },
+
+  /* One sector runs hotter than the rest. AI companies get disproportionate
+     coverage, carry the highest volatility outside crypto, show the steepest
+     historical climbs, and are the only sector that can inflate and pop as a
+     group. Everything about this is deliberate. */
+  ai: { desc:["Intelligence","Cognition","Neural","Compute","Inference","Labs","Synthetics","Cortex"],
+    roles:[["ai_chips"],["ai_software"],["ai_infra"]], vol:[.024,.042], drift:[.0012,.0030], div:[0,0],
+    coverage: 3.4,
+    lines:["designs accelerators for training and inference workloads, sold almost entirely to {n} hyperscale customers",
+           "licenses foundation models and the tooling around them, with usage-based pricing and no meaningful contract backlog",
+           "builds and operates data centre capacity leased to model developers on multi-year terms",
+           "supplies the interconnect and memory that accelerator clusters are built from"] },
+};
+
+/* How much of the press a sector attracts, before size is taken into account. */
+const SECTOR_COVERAGE = {
+  ai:3.4, technology:1.9, healthcare:1.2, financials:1.1, energy:1.1, discretion:1.0,
+  industrials:0.9, materials:0.85, transport:0.8, telecom:0.8, staples:0.75,
+  utilities:0.6, realestate:0.55,
+};
+
+const CITIES = ["Gary, Indiana","Tulsa, Oklahoma","Springfield, Missouri","Harrisburg, Pennsylvania",
+  "Akron, Ohio","Duluth, Minnesota","Wichita, Kansas","Mobile, Alabama","Erie, Pennsylvania",
+  "Peoria, Illinois","Shreveport, Louisiana","Spokane, Washington","Rochester, New York",
+  "Chattanooga, Tennessee","Fort Wayne, Indiana","Bakersfield, California","Toledo, Ohio",
+  "Savannah, Georgia","Boise, Idaho","Scranton, Pennsylvania","Fargo, North Dakota",
+  "Lubbock, Texas","Youngstown, Ohio","Bangor, Maine","Cedar Rapids, Iowa","Reno, Nevada"];
+const INITIALS = "ABCDEFGHJKLMNPRSTVW".split("");
+const LASTNAMES = ["Hollingsworth","Aunspaugh","Okonjo","Vasquez","Threadgold","Considine",
+  "Mbeki","Rasmussen","Whitcombe","Pyke","Dhillon","Farquhar","Okafor","Lindqvist",
+  "Beauchamp","Nakamura","Oyelaran","Castellan","Wrightson","Abernethy","Petrosyan","Kowalczyk"];
+
+const VOWELS = new Set("aeiouAEIOU");
+const strongConsonants = w => w.split("").filter(c => /[a-z]/i.test(c) && !VOWELS.has(c));
+
+function tickerFor(name, taken){
+  const words = name.replace(/&/g, " ").split(/\s+/).filter(Boolean);
+  let base;
+  if (words.length >= 2){
+    const cons = strongConsonants(words[0].slice(1));
+    base = (words[0][0] + (cons[0] || words[0][1] || "X") + words[1][0]).toUpperCase();
+  } else {
+    const w = words[0];
+    base = (w[0] + strongConsonants(w.slice(1)).slice(0, 3).join("")).toUpperCase();
+    if (base.length < 3) base = w.slice(0, 3).toUpperCase();
+  }
+  if (!taken.has(base)) return base;
+  // collisions resolve by extending a letter, then by substituting one
+  const src = name.replace(/[^A-Za-z]/g, "").toUpperCase();
+  for (const c of src + "XYZ"){
+    const t = base + c;
+    if (t.length <= 5 && !taken.has(t)) return t;
+  }
+  let n = 2;
+  while (taken.has(base + n)) n++;
+  return base + n;
+}
+
+const between = (r, lo, hi) => lo + r() * (hi - lo);
+
+function generateUniverse(seed, anchors){
+  const r = mulberry32(seed ^ 0x5bf03635);
+  const p = arr => arr[Math.floor(r() * arr.length)];
+  const taken = new Set(anchors.map(a => a.ticker));
+  const usedNames = new Set(anchors.map(a => a.name));
+  const out = anchors.slice();
+  const sectorKeys = Object.keys(SECTOR_KIT);
+  // Roles cycle within each sector rather than being drawn at random. Random
+  // assignment can leave a role with no companies at all, and then every story
+  // written against that role quietly moves nothing.
+  const roleTurn = {};
+
+  let guard = 0;
+  while (out.length < CONFIG.universeSize && guard++ < 6000){
+    const sector = sectorKeys[out.length % sectorKeys.length];
+    const kit = SECTOR_KIT[sector];
+
+    // three name shapes
+    let name;
+    const shape = r();
+    if (shape < 0.28) name = p(ROOTS);
+    else if (shape < 0.82) name = p(ROOTS) + " " + p(kit.desc);
+    else {
+      const a = p(SURNAMES); let b2 = p(SURNAMES);
+      while (b2 === a) b2 = p(SURNAMES);
+      name = r() < 0.5 ? `${a} & ${b2}` : `${a} ${b2}`;
+    }
+    if (usedNames.has(name)) continue;
+    usedNames.add(name);
+
+    const ticker = tickerFor(name, taken);
+    taken.add(ticker);
+
+    roleTurn[sector] = (roleTurn[sector] || 0);
+    const roles = kit.roles[roleTurn[sector]++ % kit.roles.length];
+    /* Market cap is drawn from a heavy tail, not a uniform range. Real markets
+       are a handful of giants and a very long spine of companies nobody has
+       heard of, and coverage only concentrates the way it does in life if the
+       sizes concentrate first. AI and technology skew larger on top of that. */
+    const u = Math.max(r(), 0.004);
+    let cap = 3.0e8 * Math.pow(1 / u, 1.35);
+    if (sector === "ai") cap *= 2.6;
+    else if (sector === "technology") cap *= 1.5;
+    else if (sector === "utilities" || sector === "realestate") cap *= 0.55;
+    cap = Math.min(cap, 2.6e12);
+
+    const price = Math.round(between(r, 9, 340) * 100) / 100;
+    const float = Math.max(5e6, Math.round(cap / price));
+    const line = p(kit.lines).replace(/\{n\}/g, String(Math.floor(between(r, 3, 60))))
+      .replace(/\{input\}/g, p(["iron ore","bauxite","limestone","recovered scrap","potash"]))
+      .replace(/\{output\}/g, p(["plate and coil","industrial gases","polymers","structural sections","fertiliser"]));
+
+    out.push({
+      ticker, name, sector, roles,
+      price,
+      beta: Math.round(between(r, 0.55, 1.55) * 100) / 100,
+      vol: between(r, kit.vol[0], kit.vol[1]),
+      drift: between(r, kit.drift[0], kit.drift[1]),
+      div: Math.round(between(r, kit.div[0], kit.div[1]) * 10) / 10,
+      float,
+      employees: Math.round(between(r, 300, 60000) / 100) * 100,
+      hq: p(CITIES),
+      ceo: p(INITIALS) + ". " + p(LASTNAMES),
+      founded: Math.floor(between(r, 1878, 1998)),
+      liquidity: Math.min(0.97, 0.55 + Math.log10(float / 1e6) / 5),
+      desc: `${name} ${line}. ` + p([
+        "Margins are thin and volumes large, so small changes in input costs matter more than they look.",
+        "Roughly two thirds of revenue is contracted a year ahead; the balance is exposed to spot pricing.",
+        "The business is cyclical and carries more debt than its peers, which cuts both ways.",
+        "Management has prioritised the dividend over growth for most of the last decade.",
+        "Costs are dominated by labour and energy, and the company has limited ability to pass either through quickly.",
+        "A single customer accounts for a meaningful share of revenue, a fact disclosed in the filings and rarely discussed.",
+      ]),
+    });
+  }
+  return out;
+}
+
+
+/* ===========================================================================
+   3. ENGINE
+   ======================================================================== */
+function mulberry32(a){
+  return function(){
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+let rand = mulberry32(1);
+function gauss(){
+  let u = 0, v = 0;
+  while (u === 0) u = rand();
+  while (v === 0) v = rand();
+  return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+const money = n => (n < 0 ? "-$" : "$") + Math.abs(n)
+  .toLocaleString("en-US", { minimumFractionDigits:2, maximumFractionDigits:2 });
+const pct = n => (n >= 0 ? "+" : "") + n.toFixed(2) + "%";
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;" }[c]));
+const cls = n => n > 0.0001 ? "up" : n < -0.0001 ? "down" : "flat";
+
+let S = null;
+
+function newGame(seed){
+  seed = seed || (Date.now() % 2147483647);
+  rand = mulberry32(seed);
+  const m = CONFIG.modes[CONFIG.mode];
+
+  const assets = {};
+  const listed = generateUniverse(seed, ANCHORS);
+  for (const a of listed){
+    const back = backfill(a);
+    assets[a.ticker] = {
+      ...a, price:a.price, open:a.price, prevClose:a.price,
+      dayHigh:a.price, dayLow:a.price, volume:0,
+      intraday:[a.price], intradayVol:[0],
+      sessions:[],                    // recent completed days, tick by tick
+      history:back.closes,            // every daily close, backfill onward
+      histVol:back.vols,
+      backfillLen:back.closes.length, // where the invented past ends
+    };
+  }
+
+  S = {
+    seed, tier:CONFIG.startTier, broker:"tugmore", positions:[],
+    day:1, tick:0, phase:"closed", paused:false,
+    cash:m.startCash, rep:m.startRep,
+    assets,
+    roleIndex: buildRoleIndex(assets),
+    indices: buildIndices(assets),
+    sectorState:Object.fromEntries(Object.keys(SECTORS).map(k => [k, 0])),
+    mail:[], news:[], effects:[], schedule:null, openNews:null, newsFilter:"all",
+    tutorial:{}, realTimePlayed:0, tradesMade:0,
+    lastError:null, lastOk:null,
+    tabs:[{ url:"nscrape.com/mail" }], activeTab:0,
+    sortKey:"cap", sortDir:-1, watchSel:"IVS", quote:"IVS",
+    search:"", lastAmt:"200", openMail:null, range:"1D", openIndex:"STR",
+  };
+
+  // Bank letter first so the Tugmore welcome lands on top of the inbox: it is
+  // the one the opening dialog points at, and the first thing to read.
+  backfillIndices();
+  mailSeq = 0;
+  deliver(MAILBOX.bankWelcome(), true);
+  deliver(MAILBOX.welcome(), true);
+  return S;
+}
+
+/* Several years of daily closes with a sector-appropriate trend. The chart is
+   a lure by design: it shows the past, and the forward drift comes from the
+   engine, not from this line. */
+function backfill(a){
+  const n = 3 * CONFIG.daysPerYear, closes = [], vols = [];
+  // The chart is a lure. AI names show years of climbing because that is what
+  // a bubble looks like from inside it, not because the engine owes them
+  // anything going forward.
+  const trend = a.drift * (a.sector === "ai" ? 4.2 : 2.2);
+  let p = a.price / Math.pow(1 + trend, n);
+  for (let i = 0; i < n; i++){
+    const r = trend + a.vol * 0.8 * gauss();
+    p *= Math.exp(r);
+    closes.push(p);
+    vols.push(Math.round(a.float * 0.004 * (0.5 + rand()) * (1 + Math.abs(r) * 40)));
+  }
+  const adj = a.price / closes[closes.length - 1];
+  return { closes: closes.map(x => x * adj), vols };
+}
+
+/* role -> [tickers]. Rebuilt whenever the universe is built, and the only
+   thing news effects ever resolve against. */
+function buildRoleIndex(assets){
+  const idx = {};
+  for (const t in assets)
+    for (const r of assets[t].roles || [])
+      (idx[r] = idx[r] || []).push(t);
+  return idx;
+}
+
+/* Tier 1 shows four names. It is not a filter over a visible list — the rest
+   of the market simply is not there yet, with no greyed-out rows to tease it. */
+function listedAssets(){
+  if (S.tier >= 2) return Object.values(S.assets);
+  return CONFIG.starterTickers.map(t => S.assets[t]).filter(Boolean);
+}
+const isListed = t => S.tier >= 2 || CONFIG.starterTickers.includes(t);
+
+/* ---------------------------------------------------------------------------
+   A CENTURY OF INVENTED HISTORY
+
+   Purely cosmetic, and worth it. Each index runs back as far as the thing it
+   is a parody of: the industrial average to 1896, the broad index to 1957, the
+   composite to 1971. Long enough that pulling the chart out to MAX shows a
+   shape a person actually recognises — the twenties boom, the crater after it,
+   the post-war run, the seventies going nowhere in a hurry, the long bull, the
+   bubble and the hole it left.
+
+   Years that mattered are scripted. Every other year is drawn from a lognormal
+   with a positive drift, because the honest long-run shape of an equity index
+   is up and to the right with the floor falling out every couple of decades.
+
+   None of this feeds the price engine. It is a lure, exactly like the
+   companies' three-year charts: the past is dramatic, and the forward drift
+   owes it nothing.
+   ------------------------------------------------------------------------ */
+const HISTORY_SCRIPT = {
+  1907:-0.38, 1908:+0.46,                                  // the panic
+  1915:+0.82, 1916:-0.04, 1917:-0.22, 1919:+0.30,
+  1920:-0.33, 1921:+0.13,
+  1924:+0.26, 1925:+0.30, 1926:+0.03, 1927:+0.29, 1928:+0.48,
+  1929:-0.17, 1930:-0.34, 1931:-0.53, 1932:-0.23, 1933:+0.67, // the crater
+  1937:-0.33, 1938:+0.28,
+  1941:-0.15, 1942:+0.08, 1945:+0.27,
+  1954:+0.44, 1958:+0.34,
+  1962:-0.11, 1966:-0.19, 1968:+0.08,
+  1969:-0.15, 1970:+0.05, 1973:-0.17, 1974:-0.28, 1975:+0.38, // the seventies
+  1977:-0.12, 1981:-0.09,
+  1982:+0.20, 1983:+0.23, 1985:+0.28, 1986:+0.23,
+  1987:-0.02,                                                // crashed, ended flat
+  1989:+0.28, 1990:-0.08, 1991:+0.27, 1995:+0.34, 1996:+0.20,
+  1997:+0.31, 1998:+0.27, 1999:+0.20,
+  2000:-0.10, 2001:-0.13, 2002:-0.23,                        // the unwind
+  2003:+0.26, 2004:+0.09, 2005:+0.03, 2006:+0.14, 2007:+0.04,
+  2008:-0.38, 2009:+0.23,                                    // the financial crisis
+  2010:+0.13, 2011:0.00, 2012:+0.13, 2013:+0.30, 2014:+0.11,
+  2015:-0.01, 2016:+0.10, 2017:+0.19, 2018:-0.06, 2019:+0.29,
+  2020:+0.16,                                                // fell through the floor, closed up
+  2021:+0.27, 2022:-0.19, 2023:+0.24,
+};
+
+/* The composite is the same market with the volume turned up: it runs harder
+   in the boom and falls through the floor afterwards. */
+const TECH_SCRIPT = {
+  1973:-0.31, 1974:-0.35, 1975:+0.30,
+  1990:-0.18, 1991:+0.57, 1995:+0.40, 1996:+0.23, 1997:+0.22,
+  1998:+0.40, 1999:+0.86,
+  2000:-0.39, 2001:-0.21, 2002:-0.32,
+  2003:+0.50, 2008:-0.41, 2009:+0.44, 2013:+0.38, 2017:+0.28,
+  2019:+0.35, 2020:+0.44, 2021:+0.21, 2022:-0.33, 2023:+0.43,
+};
+
+/* A crash inside a year that closed near flat still has to be visible, or 1987
+   is just a boring sideways stretch. */
+const INTRAYEAR_CRASH = { 1929:0.48, 1987:0.34, 1907:0.30, 2001:0.26,
+                          2008:0.42, 2020:0.38, 2022:0.24 };
+
+function deepHistory(def, endValue, rng){
+  // ends where the constituent-derived three-year backfill takes over
+  const startYear = def.since, endYear = CONFIG.epochYear - 3;
+  const dpy = CONFIG.daysPerYear;
+  const g = () => {
+    let u = 0, v = 0;
+    while (u === 0) u = rng();
+    while (v === 0) v = rng();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  };
+
+  const out = [];
+  let p = def.sinceValue;
+  for (let y = startYear; y < endYear; y++){
+    let annual = (def.flavor === "tech" && TECH_SCRIPT[y] !== undefined)
+      ? TECH_SCRIPT[y] : HISTORY_SCRIPT[y];
+    if (annual === undefined){
+      const vol = def.flavor === "tech" ? 0.26 : def.flavor === "old" ? 0.19 : 0.17;
+      annual = Math.exp(0.072 + vol * g()) - 1;
+    }
+    const perDay = Math.pow(1 + annual, 1 / dpy) - 1;
+    const noise = (def.flavor === "tech" ? 0.022 : 0.016);
+    const dip = INTRAYEAR_CRASH[y];
+    for (let d = 0; d < dpy; d++){
+      p *= (1 + perDay) * Math.exp(noise * g());
+      // a scripted intra-year crater, cut in fast and clawed back slowly
+      if (dip){
+        const t = d / dpy;
+        const shape = t < 0.55 ? 0 : t < 0.65 ? (t - 0.55) / 0.10 : 1 - (t - 0.65) * 0.9;
+        p *= 1 - dip * 0.055 * Math.max(0, shape);
+      }
+      out.push(Math.max(0.5, p));
+    }
+  }
+
+  // Pin both ends without flattening the shape: spread the correction
+  // geometrically across the series.
+  const raw = out[out.length - 1];
+  const k = Math.pow(endValue / raw, 1 / out.length);
+  return out.map((v, i) => v * Math.pow(k, i + 1));
+}
+
+/* Membership is fixed when the world is built, so the index is a consistent
+   basket rather than whatever happens to qualify this morning. */
+function buildIndices(assets){
+  const out = {};
+  for (const k in INDICES){
+    const def = INDICES[k];
+    let members = Object.values(assets).filter(def.member);
+    if (def.limit)
+      members = members.sort((a, b) => marketCap(b) - marketCap(a)).slice(0, def.limit);
+    const tickers = members.map(a => a.ticker);
+    const divisor = def.weight === "price"
+      ? members.reduce((t, a) => t + a.price, 0) / def.base
+      : members.reduce((t, a) => t + marketCap(a), 0) / def.base;
+    out[k] = { ...def, members:tickers, divisor,
+               value:def.base, prevClose:def.base, open:def.base,
+               intraday:[def.base], history:[], histVol:[] };
+  }
+  return out;
+}
+
+function indexValue(ix){
+  let agg = 0;
+  for (const t of ix.members){
+    const a = S.assets[t];
+    if (!a) continue;
+    agg += ix.weight === "price" ? a.price : marketCap(a);
+  }
+  return agg / ix.divisor;
+}
+
+function updateIndices(){
+  for (const k in S.indices){
+    const ix = S.indices[k];
+    ix.value = indexValue(ix);
+    ix.intraday.push(ix.value);
+  }
+}
+
+/* Backfill index history from the constituents' invented past, so the charts
+   go back as far as the companies do. */
+function backfillIndices(){
+  const n = 3 * CONFIG.daysPerYear;
+  for (const k in S.indices){
+    const ix = S.indices[k];
+    const hist = [];
+    for (let d = 0; d < n; d++){
+      let agg = 0;
+      for (const t of ix.members){
+        const a = S.assets[t];
+        const px = a.history[d];
+        if (px === undefined) continue;
+        agg += ix.weight === "price" ? px : px * a.float;
+      }
+      hist.push(agg / ix.divisor);
+    }
+    const deep = deepHistory(ix, hist[0], mulberry32((S.seed ^ 0x9e3779b9) + k.charCodeAt(0)));
+    ix.history = deep.concat(hist);
+    ix.histVol = ix.history.map(() => 0);
+    ix.backfillLen = ix.history.length;
+    ix.inception = ix.since;
+  }
+}
+
+const spread = a =>
+  Math.max(CONFIG.spreadFloor, (1 - a.liquidity) * 0.010 + a.vol * 0.05) * broker().spreadMult;
+const fee = () => broker().commission;
+const askOf  = a => a.price * (1 + spread(a) / 2);
+const bidOf  = a => a.price * (1 - spread(a) / 2);
+
+function stepTick(){
+  const tpd = CONFIG.ticksPerDay;
+  runSchedule();
+  const fx = effectDrift();
+
+  const marketFactor = (CONFIG.dailyMarketDrift + CONFIG.earlyBullTilt) / tpd
+                     + (CONFIG.dailyMarketVol / Math.sqrt(tpd)) * gauss()
+                     + fx.market;
+
+  const sVol = CONFIG.dailySectorVol / Math.sqrt(tpd);
+  for (const k in S.sectorState) S.sectorState[k] = sVol * gauss() + (fx.sector[k] || 0);
+
+  for (const t in S.assets){
+    const a = S.assets[t];
+    let jump = 0;
+    if (rand() < CONFIG.jumpChancePerTick)
+      jump = (rand() < 0.5 ? -1 : 1) * CONFIG.jumpSize * (0.5 + rand());
+
+    const r = a.beta * marketFactor
+            + SECTORS[a.sector].beta * S.sectorState[a.sector]
+            + a.drift / tpd
+            + (fx.ticker[t] || 0)
+            + (a.vol / Math.sqrt(tpd)) * gauss()
+            + jump;
+
+    a.price = Math.max(0.01, a.price * Math.exp(r));
+    a.dayHigh = Math.max(a.dayHigh, a.price);
+    a.dayLow  = Math.min(a.dayLow, a.price);
+
+    const tickVol = Math.round(a.float * 0.00002 * (0.5 + rand()) * (1 + Math.abs(r) * 260));
+    a.volume += tickVol;
+    a.intraday.push(a.price);
+    a.intradayVol.push(tickVol);
+  }
+  updateIndices();
+  S.tick++;
+  if (S.tick >= CONFIG.ticksPerDay) closeDay();
+}
+
+function openDay(){
+  for (const t in S.assets){
+    const a = S.assets[t];
+    a.prevClose = a.price;
+    a.price = Math.max(0.01, a.price * Math.exp(CONFIG.overnightGapVol * gauss()));
+    a.open = a.price;
+    a.dayHigh = a.price; a.dayLow = a.price; a.volume = 0;
+    a.intraday = [a.price]; a.intradayVol = [0];
+  }
+  for (const k in S.indices) S.indices[k].prevClose = S.indices[k].value;
+  updateIndices();                       // prices gapped overnight; revalue first
+  for (const k in S.indices){
+    const ix = S.indices[k];
+    ix.open = ix.value;
+    ix.intraday = [ix.value];
+  }
+  S.tick = 0;
+  S.phase = "open";
+  scheduleDay();
+  flash("Market open.");
+  render();
+}
+
+function closeDay(){
+  S.phase = "closed";
+  for (const t in S.assets){
+    const a = S.assets[t];
+    // Archive the session tick by tick so week and hour views have real data
+    // rather than a straight line between closes. Capped, because a thousand
+    // companies' worth of tick history is not something to keep forever.
+    a.sessions.push({ day:S.day, prices:a.intraday.slice(), vols:a.intradayVol.slice() });
+    if (a.sessions.length > CONFIG.sessionsKept) a.sessions.shift();
+    a.history.push(a.price);
+    a.histVol.push(a.volume);
+  }
+  for (const k in S.indices){
+    S.indices[k].history.push(S.indices[k].value);
+    S.indices[k].histVol.push(0);
+  }
+  if (S.positions.length) step("hold_overnight");     // carrying it through is a step
+  deliver(MAILBOX.newsletter());
+  S.day++;
+  flash("Market closed. Planning.");
+  render();
+}
+
+/* -- orders. Refusals are plain text in the ticket, and each one re-renders,
+      or the player is told nothing at all. ------------------------------- */
+function fail(msg){ S.lastError = msg; render(); return false; }
+
+function buy(ticker, dollars){
+  S.lastError = S.lastOk = null;
+  const a = S.assets[ticker];
+  if (!a) return fail("No such ticker.");
+  if (S.phase !== "open") return fail("The market is closed. Orders cannot be placed outside trading hours.");
+  if (!isListed(ticker)) return fail("That security is not available on your account.");
+  if (S.positions.some(x => x.ticker === ticker))
+    return fail(`You already hold ${a.ticker}. Adding to a position is not supported on this account.`);
+  if (S.positions.length >= slotCount())
+    return fail(slotCount() === 1
+      ? "You already hold a position. Your account supports one at a time."
+      : `All ${slotCount()} position slots are in use. Close one first.`);
+  if (!(dollars > 0)) return fail("Enter an amount to invest.");
+
+  if (dollars + fee() > S.cash)
+    return fail(`Insufficient cash. ${money(dollars)} plus ${money(fee())} commission `
+              + `exceeds your balance of ${money(S.cash)}.`);
+
+  const ask = askOf(a), shares = dollars / ask;
+  const maxShares = a.float * CONFIG.maxFloatFraction;
+  if (shares > maxShares)
+    return fail(`Order too large. The maximum on ${a.ticker} is `
+              + `${maxShares.toLocaleString("en-US",{maximumFractionDigits:0})} shares.`);
+
+  S.cash -= dollars + fee();
+  S.positions.push({ ticker, shares, costBasis:ask, openedDay:S.day,
+                     openedTick:S.tick, commissionPaid:fee(), broker:S.broker });
+  S.tradesMade++;
+  S.lastOk = `Bought ${shares.toFixed(4)} ${a.ticker} at ${money(ask)}. `
+           + `Commission ${money(fee())}.`;
+  step("place_buy");
+  render();
+  return true;
+}
+
+function sell(ticker){
+  S.lastError = S.lastOk = null;
+  if (S.phase !== "open") return fail("The market is closed. Orders cannot be placed outside trading hours.");
+  if (!S.positions.length) return fail("You have no position to sell.");
+
+  const idx = ticker ? S.positions.findIndex(x => x.ticker === ticker) : 0;
+  if (idx < 0) return fail(`You do not hold ${ticker}.`);
+  const p = S.positions[idx], a = S.assets[p.ticker], bid = bidOf(a);
+  const proceeds = p.shares * bid - fee();
+  const pnl = proceeds - (p.shares * p.costBasis + p.commissionPaid);
+
+  S.cash += proceeds;
+  S.positions.splice(idx, 1);
+  S.tradesMade++;
+
+  // Reputation barely moves on an unleveraged trade: 4 x (pnl / net worth),
+  // capped, then damped by distance from zero.
+  let d = Math.max(-0.6, Math.min(0.6, 4 * (pnl / Math.max(netWorth(), 1))));
+  if ((d > 0 && S.rep >= 0) || (d < 0 && S.rep <= 0)) d *= (100 - Math.abs(S.rep)) / 100;
+  S.rep = Math.max(-100, Math.min(100, S.rep + d));
+
+  S.lastOk = `Sold ${p.shares.toFixed(4)} ${a.ticker} at ${money(bid)}. `
+           + `Realised ${pnl >= 0 ? "gain" : "loss"} of ${money(Math.abs(pnl))}.`;
+  step("close_position");
+  render();
+  return true;
+}
+
+const netWorth = () =>
+  S.cash + S.positions.reduce((t, p) => t + p.shares * bidOf(S.assets[p.ticker]), 0);
+
+/* Slots come from the tier, and are the quiet backbone of difficulty: one slot
+   forces conviction, three let you diversify away the bad luck. */
+function slotCount(){ return S.tier >= 2 ? 3 : 1; }
+
+function pnlOf(p){
+  const a = S.assets[p.ticker], bid = bidOf(a);
+  const value = p.shares * bid;
+  return { bid, value, pnl: value - (p.shares * p.costBasis + p.commissionPaid) - fee() };
+}
+const holding = t => S.positions.find(p => p.ticker === t) || null;
+
+/* -- calendar ------------------------------------------------------------ */
+/* Day numbers go negative: the backfilled history sits before the career
+   starts, and the chart has to label those years properly rather than
+   clamping three invented years onto day one. Floor division and a
+   positive modulo handle both directions. */
+function gameDate(day){
+  const idx = day - 1;
+  const y = Math.floor(idx / CONFIG.daysPerYear);
+  const inYear = ((idx % CONFIG.daysPerYear) + CONFIG.daysPerYear) % CONFIG.daysPerYear;
+  const q = Math.floor(inYear / CONFIG.daysPerQuarter) + 1;
+  const inQ = inYear % CONFIG.daysPerQuarter;
+  const month = q * 3 - 3 + Math.floor(inQ / 4);
+  const dom = 3 + (inQ % 4) * 7;
+  const yr = CONFIG.epochYear + y;
+  return { y:yr, q, month, dom, inQ, label:`${MONTHS[month].slice(0,3)} ${dom}, ${yr}` };
+}
+function clockLabel(){
+  if (S.phase !== "open") return "--:--";
+  const span = CONFIG.closeMinute - CONFIG.openMinute;
+  const m = CONFIG.openMinute + Math.floor(span * (S.tick / CONFIG.ticksPerDay));
+  return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+}
+
+/* ===========================================================================
+   4. TUTORIAL + MAIL
+   Nothing in tier 1 is explained by a tooltip. Everything arrives as mail.
+   ======================================================================== */
+const STEPS = [
+  { id:"read_welcome",    label:"Read the welcome letter from Tugmore Direct" },
+  { id:"search_ticker",   label:"Look up a ticker on the finance site" },
+  { id:"open_profile",    label:"Open a company profile and read what it does" },
+  { id:"place_buy",       label:"Buy a position" },
+  { id:"hold_overnight",  label:"Carry it through a close" },
+  { id:"close_position",  label:"Sell it" },
+  { id:"read_story",      label:"Read a story on the wire" },
+  { id:"read_newsletter", label:"Read a daily newsletter" },
+];
+const stepsDone = () => STEPS.filter(s => S.tutorial[s.id]).length;
+
+function step(id){
+  if (S.tutorial[id]) return;
+  S.tutorial[id] = true;
+  flash("Noted.");
+  if (id === "place_buy") deliver(MAILBOX.firstFill());
+  checkTier();
+  render();
+}
+
+function checkTier(){
+  if (S.tier !== 1 || stepsDone() < STEPS.length) return;
+  S.tier = 2;
+  deliver(MAILBOX.tier2());
+  setTimeout(showTier2, 60);
+}
+
+let mailSeq = 0;
+function deliver(m, quiet){
+  m.id = ++mailSeq; m.read = false; m.day = S ? S.day : 1;
+  S.mail.unshift(m);
+  if (!quiet) softRender();
+}
+
+/* Mail and stories arrive mid-session, and a full rebuild at that moment would
+   close a dropdown or eat a half-typed order. Repaint the chrome always, the
+   page only when the player is looking at something the arrival changes and is
+   not in the middle of typing. */
+function softRender(){
+  if (!document.getElementById("viewport")) return;
+  paintChrome();
+  const base = currentTab().url.split("?")[0];
+  const affected = base === "nscrape.com/mail" || base === "quillstreet.com/news";
+  if (affected && !isTyping()){
+    vp().innerHTML = siteFor(currentTab().url).render();
+    paintCharts();
+  }
+  paintStatus();
+}
+
+const MAILBOX = {
+  welcome: () => ({
+    from:"Tugmore Direct", addr:"noreply@tugmore.com",
+    subject:"Your account is open",
+    body:[
+      "Your brokerage account has been opened and funded. The balance is five hundred dollars. We are required to tell you that this is not very much.",
+      "You can trade four listed companies at present. Your account supports one open position at a time, which sounds restrictive and is. Orders are entered in dollars rather than shares, so a two hundred dollar order in a sixty dollar stock buys you three and a third shares.",
+      "You will be quoted two prices on everything. The lower is what a buyer will pay you; the higher is what a seller wants. You buy at the higher and sell at the lower, and the difference stays in the market. It is small. It is not nothing.",
+      "Commission is two dollars a trade, charged on the way in and again on the way out.",
+      "Start at the finance site. Look something up before you buy it.",
+    ],
+    action:{ label:"Open Quill Street Markets", url:"quillstreet.com/markets" },
+    onRead:"read_welcome",
+  }),
+
+  bankWelcome: () => ({
+    from:"Cockburn & Hoare Savings", addr:"noreply@cockburnhoare.com",
+    subject:"A word of welcome from Cockburn & Hoare",
+    body:[
+      "Dear Account Holder,",
+      "Cockburn & Hoare has served families of modest means since 1856. Your deposit account has been opened alongside your brokerage account and currently earns 1.1% annually, credited quarterly.",
+      "We offer a bonus rate on balances maintained for thirty days or more. We mention this now so that you cannot say later that we did not.",
+      "Yours faithfully, The Partners",
+    ],
+    action:{ label:"View your account", url:"cockburnhoare.com" },
+  }),
+
+  firstFill: () => ({
+    from:"Tugmore Direct", addr:"noreply@tugmore.com",
+    subject:"Order filled",
+    body:[
+      "Your order has been executed. The position now appears in your account and will move with the market whether you are watching it or not.",
+      "Two things people get wrong on the first trade. The first is that you are already down by the spread and the commission the moment you are filled, so a position has to move in your favour before it breaks even. The second is that ending the day holding something is not the same as ending it in cash. Prices gap overnight. Whatever you hold at the bell, you hold through the night.",
+      "There is no rule against selling in ten minutes. There is no reward for it either.",
+    ],
+  }),
+
+  newsletter: () => {
+    const rows = Object.values(S.assets)
+      .map(a => ({ a, ch:(a.price - a.prevClose) / a.prevClose * 100 }))
+      .sort((x, y) => y.ch - x.ch);
+    const best = rows[0], worst = rows[rows.length - 1];
+    const breadth = rows.filter(r => r.ch > 0).length;
+    const today = S.news.filter(x => x.day === S.day && !x.filler);
+    return {
+      from:"Barrow Financial Network", addr:"newsroom@barrowfn.com",
+      subject:`Daily Wrap — ${gameDate(S.day).label}`,
+      body:[
+        `The tape closed with ${breadth} of ${rows.length} names higher. ${best.a.name} led at ${pct(best.ch)}; ${worst.a.name} lagged at ${pct(worst.ch)}.`,
+        rows.map(r => `${r.a.ticker} ${money(r.a.price)} ${pct(r.ch)}`).join("   ·   "),
+        today.length
+          ? "On the wire today: " + today.map(x => x.head).join("; ") + "."
+          : "Nothing of substance crossed the wire today.",
+        "We do not say which stories moved which prices, and would not be much good at it if we did.",
+      ],
+      onRead:"read_newsletter", mono:true,
+    };
+  },
+
+  tier2: () => ({
+    from:"Tugmore Direct", addr:"noreply@tugmore.com",
+    subject:"Your account has been upgraded",
+    body:[
+      "Your trading authorisation has been reviewed and extended. The restrictions placed on new accounts no longer apply to yours.",
+      "You will find the listed universe considerably larger than four names \u2014 a hundred companies across twelve sectors \u2014 and your account now carries three position slots instead of one. Squirtr and Titwell Investments have both asked us to pass along their details. We have done so; what you do about it is your business. We would note only that a firm charging nothing is being paid somehow.",
+      "Word gets around faster than you would think.",
+    ],
+  }),
+};
+
+/* ===========================================================================
+   4b. NEWS AND EFFECTS
+
+   The actual game. A story fires, and at the moment it fires its true effect
+   already exists as a number: which assets, which direction, how hard, how
+   soon, for how long. The prose is rendered from the same object, deliberately
+   vaguely. The answer exists before you guess.
+
+   Almost nothing names the company it moves. A rail strike hurts the steel
+   mill that cannot ship and the food distributor that cannot deliver, and the
+   article mentions neither. Working that out from the profile pages is the
+   skill the whole game is built on.
+
+   Being right pays out more often than being wrong, and never reliably:
+   magnitude, delay and duration are all rolled at fire time, and one story in
+   seven goes the other way regardless of how well you read it.
+   ======================================================================== */
+
+const OUTLETS = {
+  quill:  { name:"The Quill Street Journal", addr:"alerts@quillstreet.com", serious:true,
+            authors:["Marian Whitlock","P. R. Deane","Anne Stallybrass","Curtis Vane"] },
+  barrow: { name:"Barrow Financial Network", addr:"newsroom@barrowfn.com", serious:true,
+            authors:["Dale Furnival","Ingrid Mott","Sam Okere"] },
+  gutter: { name:"Gutter Press Daily", addr:"tips@gutterpress.biz", serious:false,
+            authors:["staff reporter"] },
+  herald: { name:"Tri-County Herald-Dispatch", addr:"news@tricountyherald.org", serious:false,
+            authors:["Wire services"] },
+};
+
+/* Slot pools. Every story is a template; filling the slots differently is what
+   makes a small bank feel larger than it is. */
+const SLOTS = {
+  region:   ["the upper Midwest","the Gulf coast","the Ohio valley","the Great Lakes region",
+             "the central plains","the mid-Atlantic"],
+  official: ["a department spokesman","an official familiar with the matter",
+             "a person briefed on the negotiations","a regional administrator"],
+  analyst:  ["Hargreave Partners","Doubleday Rowe","the Fentiman Group","Keel & Marsh"],
+  month:    ["March","April","September","October","November"],
+};
+const pick = arr => arr[Math.floor(rand() * arr.length)];
+function fill(str){
+  return str.replace(/\{(\w+)\}/g, (_, k) => SLOTS[k] ? pick(SLOTS[k]) : _);
+}
+
+/* Each effect: t = ticker or sector:<name> or market. mag is the TOTAL move
+   the effect is worth before randomisation. */
+const STORIES = [
+  /* ---- freight and logistics: hits the two companies that move things ---- */
+  { id:"rail_strike", outlet:"quill", tag:"BREAKING",
+    head:"Rail workers reject contract, strike vote set for Friday",
+    body:[
+      "Members of the Brotherhood of Railway Engineers voted down a proposed four-year agreement late Tuesday, with union leadership saying the offer failed to address scheduling rather than pay. A strike authorisation vote has been scheduled for Friday, and {official} said federal mediators have been asked to attend.",
+      "Freight volumes across {region} would be affected within days of any stoppage. Carriers have begun issuing embargo notices on bulk commodities, prioritising intermodal traffic and perishables. The last comparable action, in {month}, was resolved before a walkout began.",
+    ],
+    effects:[{ t:"role:steel", dir:-1, mag:.034 }, { t:"role:food_distribution", dir:-1, mag:.026 }, { t:"role:rail", dir:-1, mag:.030 }, { t:"role:trucking", dir:+1, mag:.018 }] },
+
+  { id:"diesel_up", outlet:"quill",
+    head:"Distillate stocks fall for a fifth week",
+    body:[
+      "Inventories of distillate fuel declined again last week, the fifth consecutive draw, leaving stocks roughly eleven per cent below the five-year average for this point in the calendar. Wholesale prices at {region} terminals rose accordingly.",
+      "Analysts at {analyst} attributed the tightness to strong freight demand and to maintenance at two large refineries taken offline earlier than scheduled. Refining margins on distillate have widened to their best level in more than a year, though the firm cautioned that the spread has historically closed quickly.",
+    ],
+    effects:[{ t:"role:refining", dir:+1, mag:.030 }, { t:"role:food_distribution", dir:-1, mag:.024 }, { t:"role:trucking", dir:-1, mag:.026 }, { t:"role:airline", dir:-1, mag:.020 }] },
+
+  /* ---- steel: inputs, demand, protection ---- */
+  { id:"ore_surge", outlet:"quill",
+    head:"Mine closure in Western Australia tightens seaborne ore",
+    body:[
+      "Operations at the Pilgarra iron ore complex have been suspended following a conveyor collapse, removing an estimated 4% of seaborne supply for at least one quarter. Benchmark ore prices rose 9% on the news.",
+      "The operator said no injuries were reported and that it expects a staged restart. Buyers holding annual contracts are insulated in the near term; those purchasing at spot are not. Scrap prices, which often move with ore, were unchanged.",
+    ],
+    effects:[{ t:"role:steel", dir:-1, mag:.032 }, { t:"role:mining", dir:+1, mag:.028 }] },
+
+  { id:"scrap_glut", outlet:"barrow",
+    head:"Scrap yards report a glut as demolition activity rises",
+    body:[
+      "Shredded scrap prices fell $42 a ton this month, their steepest monthly decline since {month}, as a wave of commercial demolition across {region} pushed more material into the yards than mills could absorb.",
+      "Dealers described inventories as uncomfortably full. Mills running electric arc furnaces are the natural buyers, and several have already renegotiated quarterly terms downward.",
+    ],
+    effects:[{ t:"role:steel", dir:+1, mag:.029 }, { t:"role:mining", dir:-1, mag:.016 }] },
+
+  { id:"infra_bill", outlet:"quill", tag:"IMPORTANT",
+    head:"Infrastructure package clears committee with bridge funding intact",
+    body:[
+      "A $280 billion surface transportation package advanced out of committee on Wednesday with its bridge and highway provisions largely unchanged from the draft. {official} said floor consideration is expected within three weeks.",
+      "The bill directs roughly $94 billion to structural rehabilitation over six years, concentrated in states with the oldest inventories. Industry groups have lobbied for domestic sourcing requirements, which survived in weakened form: projects must document a good-faith effort to buy domestically but may seek waivers.",
+    ],
+    effects:[{ t:"role:steel", dir:+1, mag:.042 }, { t:"role:construction", dir:+1, mag:.038 }, { t:"role:chemicals", dir:+1, mag:.014 }] },
+
+  { id:"tariff_lift", outlet:"quill", tag:"BREAKING",
+    head:"Administration lifts Section 232 duties on flat-rolled imports",
+    body:[
+      "Duties of 25% on imported flat-rolled steel will be suspended for eighteen months under an agreement announced Thursday, in exchange for commitments on volume monitoring from four exporting partners.",
+      "The administration framed the decision as an anti-inflation measure, citing construction costs. Domestic producers were not consulted before the announcement, according to {official}. Import licences for the coming quarter have already been filed at roughly double the year-ago rate.",
+    ],
+    effects:[{ t:"role:steel", dir:-1, mag:.046 }, { t:"role:automotive", dir:+1, mag:.018 }] },
+
+  { id:"auto_idle", outlet:"barrow",
+    head:"Two assembly plants idled through the end of the month",
+    body:[
+      "Production at assembly plants in {region} has been halted, with the manufacturer citing a shortage of a single electronic component. Roughly 9,000 units of planned output will be lost.",
+      "The company said it does not expect a material effect on full-year deliveries and will make up volume in the fourth quarter. Tier-one suppliers were notified last Friday; raw material orders for the affected lines have been deferred rather than cancelled.",
+    ],
+    effects:[{ t:"role:automotive", dir:-1, mag:.030 }, { t:"role:steel", dir:-1, mag:.020 }, { t:"role:semis", dir:-1, mag:.014 }] },
+
+  /* ---- refining ---- */
+  { id:"refinery_fire", outlet:"barrow", tag:"BREAKING",
+    head:"Fire shuts 340,000-barrel refinery on the Gulf coast",
+    body:[
+      "A fire in the crude unit of a large Gulf coast refinery was brought under control Tuesday evening. The operator declared force majeure on product deliveries and said the unit would remain down for at least six weeks.",
+      "The plant accounts for roughly 2% of national refining capacity. Wholesale gasoline prices on the Gulf rose four cents within the hour. Refiners outside the affected region reported no operational impact.",
+    ],
+    effects:[{ t:"role:refining", dir:+1, mag:.038 }] },
+
+  { id:"crude_spike", outlet:"quill", tag:"IMPORTANT",
+    head:"Crude jumps 8% after producers extend output restraint",
+    body:[
+      "Benchmark crude settled 8% higher after the producer group agreed to extend voluntary output reductions through the end of the year, a longer extension than the market had priced.",
+      "Equity markets treated the move as broadly inflationary. Integrated producers rose. The reaction among companies that buy crude rather than sell it was more mixed, and {analyst} noted that product prices historically lag the input by several weeks.",
+    ],
+    effects:[{ t:"role:refining", dir:-1, mag:.031 }, { t:"role:oil_producer", dir:+1, mag:.040 }, { t:"role:airline", dir:-1, mag:.032 }, { t:"market", dir:-1, mag:.008 }] },
+
+  { id:"driving_season", outlet:"barrow",
+    head:"Holiday travel forecast to set a record",
+    body:[
+      "The motoring association projects 44.8 million people will travel more than fifty miles from home over the holiday period, an increase of 4.1% and the highest figure on record.",
+      "Pump prices are running nine cents below last year. Gasoline inventories entered the period at the lower end of the seasonal range, and {analyst} expects crack spreads to be supported into {month}.",
+    ],
+    effects:[{ t:"role:refining", dir:+1, mag:.026 }, { t:"role:airline", dir:+1, mag:.018 }, { t:"role:retail_discretionary", dir:+1, mag:.012 }] },
+
+  { id:"emissions_rule", outlet:"quill",
+    head:"Regulator finalises tighter flaring limits at processing sites",
+    body:[
+      "The final rule, published Monday, tightens permitted flaring volumes at refining and processing facilities and requires continuous monitoring at stack level beginning in the third year.",
+      "Compliance costs were estimated by the agency at $1.9 billion industry-wide over a decade. Trade groups put the figure at four times that and said the monitoring requirement is unworkable at older sites. Facilities commissioned before 1960 receive no exemption.",
+    ],
+    effects:[{ t:"role:refining", dir:-1, mag:.027 }, { t:"role:chemicals", dir:-1, mag:.020 }] },
+
+  /* ---- food distribution ---- */
+  { id:"bumper_harvest", outlet:"quill",
+    head:"Grain harvest revised sharply higher",
+    body:[
+      "The department raised its production estimate by 6% in Friday's report, well above the range of trade expectations, citing better-than-expected yields across {region}.",
+      "Futures fell the daily limit. Buyers with forward contracts at higher prices will carry those costs into next quarter; those purchasing at spot will not. Ending stocks are now projected at their highest in nine years.",
+    ],
+    effects:[{ t:"role:food_distribution", dir:+1, mag:.028 }, { t:"role:food_producer", dir:-1, mag:.024 }, { t:"role:retail_grocery", dir:+1, mag:.014 }] },
+
+  { id:"drought", outlet:"quill", tag:"IMPORTANT",
+    head:"Drought conditions spread across the growing belt",
+    body:[
+      "Moderate to severe drought now covers 38% of the growing belt, up from 21% a month ago, according to the weekly monitor. Soil moisture in {region} is at its lowest for the date since 1988.",
+      "Forecasters give only a 30% chance of meaningful rainfall in the next fortnight. Analysts at {analyst} said the immediate effect is on feed and processing inputs rather than on the crop itself, since much of the acreage was planted early.",
+    ],
+    effects:[{ t:"role:food_distribution", dir:-1, mag:.030 }, { t:"role:food_producer", dir:-1, mag:.034 }, { t:"role:chemicals", dir:+1, mag:.016 }] },
+
+  { id:"institutional_cuts", outlet:"herald",
+    head:"School districts and hospitals trim procurement budgets",
+    body:[
+      "Nineteen school districts across {region} have announced reductions to food service budgets for the coming year, with several consolidating contracts to a single supplier to obtain volume pricing.",
+      "Two regional hospital systems said they would take a similar approach. {official} described the moves as prudent given flat state reimbursement. Vendors have been asked to rebid existing contracts at lower margins.",
+    ],
+    effects:[{ t:"role:food_distribution", dir:-1, mag:.022 }] },
+
+  { id:"grocer_merger", outlet:"quill", tag:"IMPORTANT",
+    head:"Regional supermarket chains agree to merge",
+    body:[
+      "Two supermarket operators with a combined 740 stores announced an all-stock merger Monday, subject to regulatory review. The companies said they expect $310 million in annual synergies by year three.",
+      "Roughly two thirds of the stated synergies come from procurement. Independent grocers' associations have asked the commission to examine the effect on suppliers, arguing that consolidation on the buying side has historically pushed distribution margins down rather than consumer prices.",
+    ],
+    effects:[{ t:"role:food_distribution", dir:-1, mag:.031 }, { t:"role:retail_grocery", dir:+1, mag:.026 }] },
+
+  /* ---- the utility ---- */
+  { id:"rate_case_win", outlet:"barrow", tag:"IMPORTANT",
+    head:"Commission approves rate settlement in full",
+    body:[
+      "State regulators approved a multi-year rate settlement on Thursday without modification, authorising a 9.8% return on equity and a rider recovering storm hardening costs outside the general case.",
+      "The settlement runs three years and was unopposed by the consumer advocate, an unusual outcome. {official} said the rider structure in particular reduces the frequency with which the utility must return to the commission.",
+    ],
+    effects:[{ t:"role:utility", dir:+1, mag:.033 }] },
+
+  { id:"rate_case_loss", outlet:"barrow", tag:"IMPORTANT",
+    head:"Regulators reject cost recovery for grid programme",
+    body:[
+      "The commission voted 3-2 against allowing recovery of $410 million spent on an advanced metering programme, finding that the utility had not demonstrated customer benefit commensurate with cost.",
+      "The order permits a refiling with additional evidence. The dissent argued the standard applied was new and applied retroactively. Analysts at {analyst} said the decision matters less for the amount than for what it signals about the commission's posture.",
+    ],
+    effects:[{ t:"role:utility", dir:-1, mag:.035 }] },
+
+  { id:"heat_wave", outlet:"barrow",
+    head:"Forecasters warn of prolonged heat across the interior",
+    body:[
+      "An upper-level ridge is expected to hold over the interior for at least ten days, with daytime highs running fifteen degrees above normal across {region}. Grid operators have issued conservation advisories.",
+      "Peak demand is expected to approach but not exceed record levels. Operators said reserve margins are adequate and that no rotating outages are anticipated. Generators with available capacity will be dispatched at the top of the stack.",
+    ],
+    effects:[{ t:"role:utility", dir:+1, mag:.024 }, { t:"role:retail_discretionary", dir:-1, mag:.010 }] },
+
+  { id:"storm_damage", outlet:"barrow", tag:"BREAKING",
+    head:"Ice storm leaves 400,000 without power across three counties",
+    body:[
+      "Freezing rain brought down transmission and distribution lines across {region} overnight. Restoration crews from four neighbouring states have been requested under the mutual assistance agreement.",
+      "The operator said full restoration could take a week in the worst-affected areas. Costs of this kind are typically deferred and recovered through a subsequent proceeding, though the timing and the amount allowed are decided case by case.",
+    ],
+    effects:[{ t:"role:utility", dir:-1, mag:.026 }, { t:"role:insurer", dir:-1, mag:.022 }] },
+
+  { id:"rates_up", outlet:"quill", tag:"IMPORTANT",
+    head:"Long bond yields reach a fourteen-month high",
+    body:[
+      "Yields on the thirty-year rose eleven basis points Thursday following a weak auction, reaching their highest level since {month} of last year. The move was concentrated at the long end.",
+      "Equity strategists at {analyst} noted that the sectors most sensitive to the long end are those bought principally for income, where the dividend competes directly with the coupon. Cyclical sectors were little changed.",
+    ],
+    effects:[{ t:"role:utility", dir:-1, mag:.030 }, { t:"role:reit", dir:-1, mag:.036 }, { t:"role:bank", dir:+1, mag:.024 }, { t:"market", dir:-1, mag:.006 }] },
+
+  /* ---- broad market ---- */
+  { id:"confidence_drop", outlet:"quill",
+    head:"Consumer confidence falls to a nine-month low",
+    body:[
+      "The confidence index fell 6.4 points in {month}, its third consecutive decline, with the expectations component weakening more than the present situation component.",
+      "Respondents citing employment as plentiful fell for a fourth month. Economists were divided on whether the series still leads spending, noting that confidence has been a poor guide since the survey's methodology changed.",
+    ],
+    effects:[{ t:"role:retail_discretionary", dir:-1, mag:.026 }, { t:"market", dir:-1, mag:.011 }] },
+
+  { id:"growth_beat", outlet:"barrow",
+    head:"Quarterly output revised up on stronger business investment",
+    body:[
+      "Output grew at a 3.4% annualised rate in the quarter, revised up from an initial 2.8%, with the revision concentrated in non-residential fixed investment.",
+      "Inventories contributed less than first estimated, which economists generally read as a healthier composition. The report had little effect on rate expectations.",
+    ],
+    effects:[{ t:"market", dir:+1, mag:.012 }, { t:"role:bank", dir:+1, mag:.014 }] },
+
+  { id:"industrial_survey", outlet:"quill",
+    head:"Factory survey slips below the expansion threshold",
+    body:[
+      "The manufacturing index registered 48.6 in {month}, down from 50.9 and below the fifty level that separates expansion from contraction. New orders fell for a second month; the employment sub-index held up.",
+      "Respondents' comments were dominated by input costs and freight availability rather than demand. Six of eighteen industries reported growth, against eleven in the prior month.",
+    ],
+    effects:[{ t:"sector:materials", dir:-1, mag:.020 }, { t:"sector:industrials", dir:-1, mag:.018 }, { t:"market", dir:-1, mag:.006 }] },
+];
+
+/* ---------------------------------------------------------------------------
+   COMPANY STORIES
+
+   These name their subject, and that is the point. The macro bank above makes
+   you infer which companies a story touches; this bank tells you exactly which
+   company, and makes you work out what the news actually means for it. A beat
+   with lowered guidance is still a beat. An upgrade from an analyst is worth
+   almost nothing. An acquisition rumour is worth a great deal and is often
+   wrong.
+
+   {co} is the company name, {tk} its ticker, {sec} its sector. self/sector are
+   resolved against the company the story fires on.
+   ------------------------------------------------------------------------ */
+const COMPANY_STORIES = [
+  { id:"beat_raise", outlet:"barrow", tag:"IMPORTANT",
+    head:"{co} beats and lifts full-year guidance",
+    body:["{co} ({tk}) reported quarterly earnings above the consensus estimate and raised its full-year outlook, citing better pricing and lower unit costs than it had assumed in the prior guide.",
+          "Management said demand visibility had improved into the second half. The company did not change its capital spending plan. Shares of comparable businesses were little moved in the session."],
+    effects:[{ t:"self", dir:+1, mag:.052 }, { t:"sector", dir:+1, mag:.008 }] },
+
+  { id:"beat_cut", outlet:"barrow", tag:"IMPORTANT",
+    head:"{co} beats on the quarter, guides the year lower",
+    body:["{co} ({tk}) reported earnings ahead of estimates on the quarter just ended, then cut its full-year outlook, pointing to softer order intake in the last six weeks and to customers extending decision cycles.",
+          "On the call, management declined to say whether the weakness was share loss or end-market. One analyst asked three times. The quarter that was reported was a good one."],
+    effects:[{ t:"self", dir:-1, mag:.055 }, { t:"sector", dir:-1, mag:.010 }] },
+
+  { id:"miss", outlet:"quill",
+    head:"{co} misses on margin as costs run ahead of price",
+    body:["{co} ({tk}) reported quarterly results below expectations, with the shortfall concentrated in gross margin rather than revenue. Input costs rose faster than the company was able to pass through.",
+          "The company maintained its full-year outlook, which implies a sharp recovery in the second half. Management described the pressure as transitory four times during the call."],
+    effects:[{ t:"self", dir:-1, mag:.046 }] },
+
+  { id:"div_raise", outlet:"quill",
+    head:"{co} raises the dividend for the {ord} consecutive year",
+    body:["The board of {co} ({tk}) approved an increase to the quarterly dividend, extending a run of consecutive annual increases that the company mentions in most of its materials.",
+          "The payout remains within the range management has guided to. The increase was funded from operating cash flow rather than from borrowing, which was not true of the prior two years."],
+    effects:[{ t:"self", dir:+1, mag:.021 }] },
+
+  { id:"div_cut", outlet:"barrow", tag:"BREAKING",
+    head:"{co} cuts its dividend by {cutpct}%",
+    body:["{co} ({tk}) will reduce its quarterly dividend, the first cut in the company's modern history. Management framed the decision as a reallocation of capital toward the balance sheet rather than as a response to trading.",
+          "The saving is roughly equivalent to one year of the company's scheduled debt amortisation. Income funds are typically forced sellers of a cut regardless of the reason given."],
+    effects:[{ t:"self", dir:-1, mag:.068 }] },
+
+  { id:"buyback", outlet:"quill",
+    head:"{co} authorises a {bb} billion dollar repurchase",
+    body:["The board of {co} ({tk}) authorised a new share repurchase programme of up to ${bb} billion, with no expiry date attached. The prior authorisation was roughly two thirds used.",
+          "Authorisations are not commitments and the company is not obliged to buy anything. Repurchases under the previous programme were concentrated in the two quarters when the shares were most expensive."],
+    effects:[{ t:"self", dir:+1, mag:.024 }] },
+
+  { id:"ceo_out", outlet:"barrow", tag:"BREAKING",
+    head:"{co} chief executive departs with immediate effect",
+    body:["{co} ({tk}) said its chief executive has left the company effective immediately and that the board has appointed the chief financial officer as interim. No reason was given beyond a reference to different perspectives on the pace of change.",
+          "The departure was not accompanied by a reaffirmation of guidance, which is the part the market usually reads. A search has been commenced."],
+    effects:[{ t:"self", dir:-1, mag:.044 }] },
+
+  { id:"short_report", outlet:"barrow", tag:"BREAKING",
+    head:"Short seller alleges revenue recognition problems at {co}",
+    body:["A short selling firm published a report Tuesday alleging that {co} ({tk}) has been recognising revenue on multi-year arrangements earlier than its accounting policy permits, and that reported growth would be materially lower on a corrected basis.",
+          "The firm disclosed a short position. {co} called the report self-interested and factually wrong, and said it stands behind its financial statements. The auditor has not commented. Reports of this kind are right perhaps a third of the time."],
+    effects:[{ t:"self", dir:-1, mag:.085 }] },
+
+  { id:"restatement", outlet:"quill", tag:"BREAKING",
+    head:"{co} to restate two years of accounts",
+    body:["{co} ({tk}) said it will restate financial statements for the last two fiscal years after identifying errors in the timing of certain cost accruals. The filing of its next report will be delayed.",
+          "The company said it does not expect the restatement to affect cash or its debt covenants. The audit committee has retained outside counsel. The chief accounting officer has left the company."],
+    effects:[{ t:"self", dir:-1, mag:.095 }] },
+
+  { id:"takeover", outlet:"barrow", tag:"BREAKING",
+    head:"{co} said to have attracted takeover interest",
+    body:["{co} ({tk}) has been approached about a possible acquisition, according to people familiar with the matter, who cautioned that no agreement has been reached and that talks may not lead to a transaction.",
+          "The approach is understood to be at a premium to the recent price. {co} declined to comment. Approaches reported at this stage are abandoned more often than they are completed."],
+    effects:[{ t:"self", dir:+1, mag:.105 }, { t:"sector", dir:+1, mag:.012 }] },
+
+  { id:"upgrade", outlet:"quill",
+    head:"{an} raises {tk} to buy",
+    body:["Analysts at {an} upgraded {co} ({tk}) to buy from hold, raising their price target and citing an improved risk-reward after the recent underperformance.",
+          "The firm made no change to its earnings estimates. The note ran to eleven pages."],
+    effects:[{ t:"self", dir:+1, mag:.013 }] },
+
+  { id:"downgrade", outlet:"quill",
+    head:"{an} cuts {tk} to sell on valuation",
+    body:["Analysts at {an} downgraded {co} ({tk}) to sell, writing that the shares already discount a recovery that the firm does not expect to arrive before next year.",
+          "Estimates were left unchanged. The same firm upgraded the stock nine months ago."],
+    effects:[{ t:"self", dir:-1, mag:.016 }] },
+
+  { id:"probe", outlet:"quill", tag:"IMPORTANT",
+    head:"Regulators open an inquiry into {co}",
+    body:["{co} ({tk}) disclosed in a filing that it has received a request for documents from regulators relating to its disclosure practices, and said it is cooperating fully.",
+          "Inquiries of this kind frequently close without action and are rarely announced when they do. The company said it does not expect a material effect on its operations."],
+    effects:[{ t:"self", dir:-1, mag:.036 }] },
+
+  { id:"capacity", outlet:"barrow",
+    head:"{co} commits to a new {region} facility",
+    body:["{co} ({tk}) will build a new facility in {region}, with production expected to begin in the third year and an initial investment in the high hundreds of millions.",
+          "The project is supported by state incentives contingent on employment targets. Capital spending will run above the company's stated long-term range until the plant is commissioned."],
+    effects:[{ t:"self", dir:+1, mag:.018 }] },
+
+  { id:"index_add", outlet:"quill",
+    head:"{co} to join the {idx}",
+    body:["{co} ({tk}) will be added to the {idx} before the open on Monday, replacing a company that no longer meets the index's size criteria.",
+          "Funds tracking the index will need to buy the shares. Most of that demand has historically been anticipated in the days before the change takes effect rather than on the day itself."],
+    effects:[{ t:"self", dir:+1, mag:.031 }] },
+
+  /* AI-only. The sector's stories are louder than everything else, which is
+     both accurate and part of how the bubble is communicated. */
+  { id:"ai_backlog", outlet:"barrow", tag:"BREAKING", only:"ai",
+    head:"{co} says backlog now exceeds {bb} billion dollars",
+    body:["{co} ({tk}) disclosed a backlog above ${bb} billion, a figure management described as representing more than a year of production at current capacity. The company said it remains supply constrained rather than demand constrained.",
+          "Roughly half the backlog is attributable to three customers, which the company does not name. None of the orders carry cancellation penalties."],
+    effects:[{ t:"self", dir:+1, mag:.088 }, { t:"sector", dir:+1, mag:.030 }] },
+
+  { id:"ai_capex_cut", outlet:"quill", tag:"BREAKING", only:"ai",
+    head:"Hyperscaler signals a slower build-out, and {co} falls with it",
+    body:["A large cloud operator said on its earnings call that it would moderate the pace of data centre construction next year, having pulled forward capacity during the build-out. It did not name suppliers.",
+          "{co} ({tk}) derives a majority of revenue from a small number of such customers. The company has not commented. Analysts at {an} said the read-across is direct but the timing is uncertain."],
+    effects:[{ t:"self", dir:-1, mag:.092 }, { t:"sector", dir:-1, mag:.042 }] },
+];
+
+/* Filler. One line, no body worth reading, delivered in the same flat voice as
+   the real thing so that skimming is a skill rather than a freebie. */
+const FILLER = [
+  { outlet:"gutter", head:"Local man says he has been to the moon, twice" },
+  { outlet:"gutter", head:"Woman wins pie contest for the eleventh year, neighbours suspicious" },
+  { outlet:"gutter", head:"Mayor's cat missing; mayor denies cat existed" },
+  { outlet:"gutter", head:"Is your toaster listening? Experts say no, we say maybe" },
+  { outlet:"gutter", head:"Man builds boat in basement, cannot remove boat from basement" },
+  { outlet:"gutter", head:"Bigfoot sighting downgraded to large raccoon" },
+  { outlet:"herald", head:"County fair attendance up slightly on last year" },
+  { outlet:"herald", head:"Road resurfacing on Route 9 to continue through the month" },
+  { outlet:"herald", head:"Library extends Saturday hours following board vote" },
+  { outlet:"herald", head:"Little league championship postponed to Sunday" },
+  { outlet:"herald", head:"Water main replacement enters its fourth week" },
+  { outlet:"herald", head:"School board approves new bus routes for the autumn" },
+  { outlet:"herald", head:"Recycling centre to accept glass on alternate Thursdays" },
+  { outlet:"gutter", head:"Doctors hate this one weird trick, which does not work" },
+];
+
+/* Brokerages. Commission is a property of the firm, not of the game: Tugmore
+   charges two dollars a trade because Tugmore charges two dollars a trade.
+   Squirtr charges nothing and takes it back in the spread, which is the whole
+   joke and also the honest slippage model. */
+const BROKERAGES = {
+  tugmore: { id:"tugmore", name:"Tugmore Direct", tier:1, commission:2.00, spreadMult:1.0,
+             note:"Two dollars a trade, each way. Good at nothing, bad at nothing." },
+  squirtr: { id:"squirtr", name:"Squirtr", tier:2, commission:0, spreadMult:2.6,
+             note:"No commission. The spread is wider and nobody mentions it." },
+  titwell: { id:"titwell", name:"Titwell Investments", tier:2, commission:1.00, spreadMult:0.85,
+             note:"A dollar a trade, and the tightest quotes on the list." },
+};
+const broker = () => BROKERAGES[S.broker] || BROKERAGES.tugmore;
+const availableBrokers = () => Object.values(BROKERAGES).filter(b => b.tier <= S.tier);
+
+/* ---------------------------------------------------------------------------
+   COVERAGE
+
+   The press does not distribute itself evenly. A trillion-dollar accelerator
+   designer is written about every day; a regional gas utility is written about
+   when its rate case is decided. Coverage is driven by size first, then by
+   how much the thing is being traded today, then by sector heat.
+
+   The practical effect: most of the hundred companies are quiet most of the
+   time, a dozen names carry the narrative, and a story about one of those
+   dozen is worth reading because it is going to keep happening.
+   ------------------------------------------------------------------------ */
+const marketCap = a => a.price * a.float;
+
+function coverageWeight(a){
+  const capB = marketCap(a) / 1e9;
+  let w = Math.pow(Math.max(capB, 0.05), 0.95);          // size dominates
+  const turnover = a.volume / Math.max(a.float * 0.004, 1);
+  w *= 1 + Math.min(2.5, turnover);                       // today's tape
+  w *= SECTOR_COVERAGE[a.sector] || 1;                    // AI runs hot
+  return w;
+}
+
+function weightedCompany(){
+  const list = listedAssets();
+  const weights = list.map(coverageWeight);
+  let roll = rand() * weights.reduce((x, y) => x + y, 0);
+  for (let i = 0; i < list.length; i++){
+    roll -= weights[i];
+    if (roll <= 0) return list[i];
+  }
+  return list[list.length - 1];
+}
+
+/* The most covered names, for the market summary and the coverage panel. */
+function majors(n){
+  return listedAssets().slice()
+    .sort((a, b) => coverageWeight(b) - coverageWeight(a))
+    .slice(0, n);
+}
+
+const absTick = () => (S.day - 1) * CONFIG.ticksPerDay + S.tick;
+
+/* Roll a story's hidden truth. Everything here is decided now; the prose the
+   player reads is rendered from the same object. */
+function spawnEffects(story, subject){
+  const inverted = rand() < CONFIG.newsInversionChance;
+  for (const e of story.effects){
+    let target = e.t;
+    if (subject){
+      if (target === "self") target = subject.ticker;
+      else if (target === "sector") target = "sector:" + subject.sector;
+    }
+    const mag = e.mag * (0.45 + 1.15 * rand()) * (inverted ? -0.35 : 1);
+    S.effects.push({
+      t: target,
+      dir: e.dir,
+      mag,
+      born: absTick(),
+      delay: Math.floor(CONFIG.newsDelayMin + rand() * (CONFIG.newsDelayMax - CONFIG.newsDelayMin)),
+      life: Math.floor(CONFIG.newsLifeMin + rand() * (CONFIG.newsLifeMax - CONFIG.newsLifeMin)),
+    });
+  }
+}
+
+/* Per-tick drift contributed by live effects, keyed by what they target.
+   Front-loaded and decaying to nothing, integrating to the rolled magnitude. */
+function effectDrift(){
+  const out = { market:0, sector:{}, ticker:{} };
+  const now = absTick();
+  S.effects = S.effects.filter(e => now - e.born <= e.delay + e.life);
+  for (const e of S.effects){
+    const age = now - e.born;
+    if (age < e.delay) continue;
+    const u = (age - e.delay) / e.life;
+    const perTick = e.dir * e.mag * (2 / e.life) * (1 - u);
+    if (e.t === "market") out.market += perTick;
+    else if (e.t.startsWith("sector:")){
+      const k = e.t.slice(7);
+      out.sector[k] = (out.sector[k] || 0) + perTick;
+    } else if (e.t.startsWith("role:")){
+      for (const tk of S.roleIndex[e.t.slice(5)] || [])
+        out.ticker[tk] = (out.ticker[tk] || 0) + perTick;
+    } else out.ticker[e.t] = (out.ticker[e.t] || 0) + perTick;
+  }
+  return out;
+}
+
+let storySeq = 0;
+function fireStory(tpl, isFiller, subject){
+  const outlet = OUTLETS[tpl.outlet];
+  const co = subject ? {
+    co: subject.name, tk: subject.ticker, sec: SECTORS[subject.sector].name,
+    an: pick(SLOTS.analyst), idx: pick(Object.values(INDICES).map(i => i.name)),
+    ord: pick(["eleventh","nineteenth","twenty-second","thirty-first","fourteenth"]),
+    cutpct: String(20 + Math.floor(rand() * 45)),
+    bb: (Math.max(0.4, marketCap(subject) / 1e9 * (0.05 + rand() * 0.2))).toFixed(1),
+  } : null;
+  const sub = str => co ? str.replace(/\{(\w+)\}/g, (m, k) => co[k] !== undefined ? co[k] : m) : str;
+  const item = {
+    n: ++storySeq,
+    id: tpl.id || ("filler" + storySeq),
+    outlet: tpl.outlet,
+    outletName: outlet.name,
+    author: pick(outlet.authors),
+    tag: tpl.tag || null,
+    head: sub(fill(tpl.head)),
+    body: (tpl.body || []).map(x => sub(fill(x))),
+    day: S.day,
+    tick: S.tick,
+    filler: !!isFiller,
+    about: subject ? subject.ticker : null,
+    read: false,
+  };
+  S.news.unshift(item);
+  if (S.news.length > 120) S.news.pop();
+  if (!isFiller) spawnEffects(tpl, subject);
+
+  // Significant stories also land in the inbox; filler mostly does not, or the
+  // inbox becomes unusable before the player has any way to filter it.
+  if (!isFiller){
+    deliver({
+      from: outlet.name, addr: outlet.addr,
+      subject: (item.tag ? item.tag + ": " : "") + item.head,
+      body: item.body.concat([`— ${item.author}, ${outlet.name}`]),
+      newsRef: item.n,
+    });
+  }
+  flash(item.filler ? "New item in the feed." : "Story breaking.");
+}
+
+/* Three significant events a day plus filler, at unannounced ticks. */
+function scheduleDay(){
+  const slots = [];
+  const spread_ = (n, kind) => {
+    for (let i = 0; i < n; i++){
+      const lo = Math.floor(CONFIG.ticksPerDay * (0.04 + 0.92 * i / n));
+      const hi = Math.floor(CONFIG.ticksPerDay * (0.04 + 0.92 * (i + 1) / n));
+      slots.push({ tick: lo + Math.floor(rand() * Math.max(1, hi - lo)), kind });
+    }
+  };
+  spread_(CONFIG.storiesPerDay, "macro");
+  spread_(S.tier >= 2 ? CONFIG.companyStoriesPerDay : 1, "company");
+  for (let i = 0; i < CONFIG.fillerPerDay; i++)
+    slots.push({ tick: Math.floor(rand() * CONFIG.ticksPerDay), kind:"filler" });
+  S.schedule = slots.sort((a, b) => a.tick - b.tick);
+}
+
+/* Prefer stories the player has not seen recently, so a short bank does not
+   feel short. */
+function nextStory(){
+  const recent = new Set(S.news.filter(x => !x.filler).slice(0, 8).map(x => x.id));
+  const fresh = STORIES.filter(s => !recent.has(s.id));
+  return pick(fresh.length ? fresh : STORIES);
+}
+
+/* Filler is noise, but the same piece of noise twice in a morning reads as a
+   bug rather than as a slow news day. */
+function nextFiller(){
+  const usedToday = new Set(S.news.filter(x => x.filler && x.day === S.day).map(x => x.head));
+  const fresh = FILLER.filter(f => !usedToday.has(f.head));
+  return pick(fresh.length ? fresh : FILLER);
+}
+
+function excerpt(str, n){
+  if (str.length <= n) return str.replace(/[.,;:\s]+$/, "");
+  return str.slice(0, str.lastIndexOf(" ", n)).replace(/[.,;:\s]+$/, "");
+}
+
+/* Pick who the press writes about, then pick a story that fits them. */
+function nextCompanyStory(){
+  const subject = weightedCompany();
+  const isAI = subject.sector === "ai";
+  const pool = COMPANY_STORIES.filter(t => !t.only || (isAI && t.only === "ai"));
+  const recent = new Set(S.news.filter(x => x.about === subject.ticker).slice(0, 4).map(x => x.id));
+  const fresh = pool.filter(t => !recent.has(t.id));
+  return { tpl: pick(fresh.length ? fresh : pool), subject };
+}
+
+function runSchedule(){
+  if (!S.schedule) return;
+  while (S.schedule.length && S.schedule[0].tick <= S.tick){
+    const slot = S.schedule.shift();
+    if (slot.kind === "filler") fireStory(nextFiller(), true);
+    else if (slot.kind === "company"){
+      const { tpl, subject } = nextCompanyStory();
+      fireStory(tpl, false, subject);
+    } else fireStory(nextStory(), false);
+  }
+}
+
+/* ===========================================================================
+   5. SITES
+
+   Anything that changes on a tick is marked data-lv so liveUpdate() can
+   rewrite it in place. Everything else is static until the next render().
+   ======================================================================== */
+const SITES = {
+  "nscrape.com":            { title:"Netscrape",                fav:"N", render:renderPortal },
+  "nscrape.com/mail":       { title:"Mail",                     fav:"M", render:renderMail },
+  "quillstreet.com/markets":{ title:"Quill Street Markets",     fav:"Q", render:renderMarkets },
+  "quillstreet.com/news":   { title:"Quill Street News",        fav:"Q", render:renderNews },
+  "quillstreet.com/index":  { title:"Quill Street Markets",     fav:"Q", render:renderIndex },
+  "quillstreet.com/quote":  { title:"Quill Street Markets",     fav:"Q", render:renderProfile },
+  "tugmore.com":            { title:"Tugmore Direct",           fav:"T", render:renderTugmore },
+  "cockburnhoare.com":      { title:"Cockburn & Hoare Savings", fav:"C", render:renderBank },
+};
+
+const BOOKMARKS = [
+  { url:"nscrape.com",             label:"Netscrape",         fav:"N", color:"#5f6368" },
+  { url:"nscrape.com/mail",        label:"Mail",              fav:"M", color:"#1a73e8", mail:true },
+  { url:"quillstreet.com/news",    label:"News",              fav:"Q", color:"#0f2440", news:true },
+  { url:"quillstreet.com/markets", label:"Quill Street",      fav:"Q", color:"#0f2440" },
+  { url:"tugmore.com",             label:"Tugmore Direct",    fav:"T", color:"#0b3d6b" },
+  { url:"cockburnhoare.com",       label:"Cockburn & Hoare",  fav:"C", color:"#9d894f" },
+];
+
+/* live-field helpers */
+const lv = (kind, t) => `data-lv="${kind}"${t ? ` data-t="${t}"` : ""}`;
+
+const idxPct = ix => (ix.value - ix.prevClose) / ix.prevClose * 100;
+
+function indexStripHTML(){
+  return `<div class="idxstrip">${Object.values(S.indices).map(ix => {
+    const c = idxPct(ix);
+    return `<div class="idxcell" data-index="${ix.id}">
+      <div class="nm">${esc(ix.name)}</div>
+      <div class="vv"><span class="num" ${lv("idxval", ix.id)}>${ix.value.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+      <span class="num ${cls(c)}" ${lv("idxchg", ix.id)}>${pct(c)}</span></div>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function renderPortal(){
+  const d = gameDate(S.day);
+  const rows = majors(12).map(a => {
+    const ch = (a.price - a.prevClose) / a.prevClose * 100;
+    return `<tr class="row" data-quote="${a.ticker}">
+      <td><b>${a.ticker}</b></td><td>${esc(a.name)}</td>
+      <td class="r num" ${lv("price",a.ticker)}>${money(a.price)}</td>
+      <td class="r num ${cls(ch)}" ${lv("change",a.ticker)}>${pct(ch)}</td></tr>`;
+  }).join("");
+
+  let cal = "";
+  for (let i = 0; i < CONFIG.daysPerQuarter; i++){
+    const n = (d.q - 1) * CONFIG.daysPerQuarter + i + 1 + (d.y - CONFIG.epochYear) * CONFIG.daysPerYear;
+    cal += `<td class="${n === S.day ? "today" : n < S.day ? "past" : ""}">${gameDate(n).dom}</td>`;
+    if (i === 4) cal += "</tr><tr>";
+  }
+
+  return `<div class="site portal">
+    <div class="masthead">
+      <h1>Netscrape</h1>
+      <div class="tagline">Your window on the world wide web</div>
+    </div>
+    ${indexStripHTML()}
+    <div class="cols">
+      <div class="card"><h3>Calendar &middot; Q${d.q} ${d.y}</h3><div class="body">
+        <table class="cal"><tr>${cal}</tr></table>
+        <div class="small muted" style="margin-top:12px">
+          Trading day ${S.day}. Quarter ${d.q}, day ${d.inQ + 1} of ${CONFIG.daysPerQuarter}.<br>
+          Scheduled: nothing.
+        </div>
+      </div></div>
+      <div class="card"><h3>Most covered</h3><table>${rows}</table>
+        <div class="body small muted">Size and turnover decide who gets written about.</div></div>
+      <div class="card"><h3>Your Sites</h3><div class="body">
+        ${BOOKMARKS.filter(b => b.url !== "nscrape.com").map(b =>
+          `<div style="padding:5px 0"><span class="lnk" data-go="${b.url}">${esc(b.label)}</span></div>`).join("")}
+      </div></div>
+    </div>
+    ${checklistHTML()}
+  </div>`;
+}
+
+function renderMail(){
+  const sel = S.mail.find(m => m.id === S.openMail) || S.mail[0];
+  if (sel && !sel.read){
+    sel.read = true;
+    if (sel.onRead) setTimeout(() => step(sel.onRead), 0);
+  }
+  const unread = S.mail.filter(m => !m.read).length;
+
+  const list = S.mail.map(m => `
+    <div class="msg ${m.read ? "" : "unread"} ${sel && m.id === sel.id ? "on" : ""}" data-mail="${m.id}">
+      <div class="from">
+        <span>${m.read ? "" : '<span class="dot"></span>'}${esc(m.from)}</span>
+        <span class="small muted">Day ${m.day}</span>
+      </div>
+      <div class="subj">${esc(m.subject)}</div>
+    </div>`).join("");
+
+  const body = !sel ? '<div class="muted">No messages.</div>' : `
+    <div class="mh">
+      <h2>${esc(sel.subject)}</h2>
+      <div class="meta">${esc(sel.from)} &lt;${esc(sel.addr)}&gt; &middot; trading day ${sel.day}</div>
+    </div>
+    <div class="bd"${sel.mono ? ' style="font-family:var(--mono);font-size:12.5px"' : ""}>
+      ${sel.body.map(p => `<p>${esc(p)}</p>`).join("")}
+    </div>
+    ${sel.action ? `<div class="actions"><button class="primary" data-go="${sel.action.url}">${esc(sel.action.label)}</button></div>` : ""}`;
+
+  return `<div class="site mail">
+    <div class="hdr"><b>Mail</b><span class="small muted">you@nscrape.com &middot; ${unread} unread</span></div>
+    <div class="split"><div class="list">${list}</div><div class="read">${body}</div></div>
+  </div>`;
+}
+
+function renderMarkets(){
+  const q = (S.search || "").trim().toUpperCase();
+  let list = listedAssets();
+  if (q) list = list.filter(a => a.ticker.includes(q) || a.name.toUpperCase().includes(q));
+
+  const k = S.sortKey, dir = S.sortDir;
+  list.sort((x, y) => {
+    const v = a => ({ ticker:a.ticker, name:a.name, price:a.price,
+      change:(a.price - a.prevClose) / a.prevClose, volume:a.volume,
+      cap:marketCap(a), coverage:coverageWeight(a),
+      sector:SECTORS[a.sector].name }[k]);
+    const A = v(x), B = v(y);
+    return (typeof A === "string" ? A.localeCompare(B) : A - B) * dir;
+  });
+
+  const th = (key, label, right) =>
+    `<th class="${right ? "r" : ""}"><span class="lnk" data-sort="${key}">${label}${
+      k === key ? (dir > 0 ? " ▲" : " ▼") : ""}</span></th>`;
+
+  const rows = list.map(a => {
+    const ch = (a.price - a.prevClose) / a.prevClose * 100;
+    return `<tr class="row" data-quote="${a.ticker}">
+      <td><b class="lnk">${a.ticker}</b>${a.sector === "ai" ? ' <span class="hot">AI</span>' : ""}</td>
+      <td>${esc(a.name)}</td>
+      <td class="small muted">${esc(SECTORS[a.sector].name)}</td>
+      <td class="r num" ${lv("price",a.ticker)}>${money(a.price)}</td>
+      <td class="r num ${cls(ch)}" ${lv("change",a.ticker)}>${pct(ch)}</td>
+      <td class="r num muted" ${lv("bidask",a.ticker)}>${money(bidOf(a))} / ${money(askOf(a))}</td>
+      <td class="r num muted" ${lv("vol",a.ticker)}>${a.volume.toLocaleString("en-US")}</td>
+      <td class="r num muted" ${lv("cap",a.ticker)}>${capLabel(a)}</td>
+      <td class="r num">${a.div.toFixed(1)}%</td>
+    </tr>`;
+  }).join("") || `<tr><td colspan="8" class="muted" style="padding:20px">No matches for "${esc(q)}".</td></tr>`;
+
+  return `<div class="site quill">
+    <div class="masthead">
+      <h1>The Quill Street Journal</h1>
+      <div class="sub">Markets &amp; Quotations</div>
+    </div>
+    <div class="navbar"><span class="on">Markets</span>
+      <span class="lnk" data-go="quillstreet.com/news">News</span><span>Opinion</span><span>Archive</span></div>
+    ${indexStripHTML()}
+    <div class="wrap">
+      <div class="toolrow">
+        <input id="q-search" placeholder="Ticker or company name" value="${esc(S.search || "")}" style="width:240px">
+        <button id="q-go">Search</button>
+        ${q ? '<button id="q-clear">Clear</button>' : ""}
+        <span class="muted small">Click a column heading to sort.</span>
+      </div>
+      <table>
+        <tr>${th("ticker","Symbol")}${th("name","Company")}${th("sector","Sector")}
+            ${th("price","Last",1)}${th("change","Change",1)}
+            <th class="r">Bid / Ask</th>${th("volume","Volume",1)}${th("cap","Mkt cap",1)}<th class="r">Yield</th></tr>
+        ${rows}
+      </table>
+      <div class="small muted" style="margin-top:14px">
+        ${list.length} of ${listedAssets().length} listed. Bid is what you will be paid. Ask is what you will pay.
+      </div>
+    </div>
+    ${checklistHTML()}
+  </div>`;
+}
+
+/* The feed. Significant stories look different from filler at a glance —
+   a tag, a masthead, two paragraphs. Filler is one line in a small font from
+   an outlet you learn to stop reading. Length is itself a signal. */
+function renderNews(){
+  const open = S.news.find(x => x.n === S.openNews);
+  const filter = S.newsFilter;
+  let items = S.news;
+  if (filter === "significant") items = items.filter(x => !x.filler);
+  if (filter === "today") items = items.filter(x => x.day === S.day);
+
+  if (open){
+    open.read = true;
+    if (!open.filler) setTimeout(() => step("read_story"), 0);
+    const o = OUTLETS[open.outlet];
+    return `<div class="site quill">
+      <div class="masthead"><h1>${esc(o.name)}</h1><div class="sub">${open.tag ? esc(open.tag) : "Report"}</div></div>
+      <div class="navbar"><span class="lnk" data-go="quillstreet.com/news">&larr; Back to the feed</span></div>
+      <div class="wrap">
+        <article>
+          ${open.tag ? `<div class="tagpill ${open.tag === "BREAKING" ? "brk" : "imp"}">${esc(open.tag)}</div>` : ""}
+          <h2 style="font:400 28px var(--serif);letter-spacing:-.5px;margin:6px 0 4px;max-width:620px">${esc(open.head)}</h2>
+          <div class="byline">By ${esc(open.author)} &middot; ${esc(o.name)} &middot; ${gameDate(open.day).label}, ${tickClock(open.tick)}</div>
+          ${open.body.length ? open.body.map(p => `<p>${esc(p)}</p>`).join("")
+            : '<p class="muted">No further detail was filed.</p>'}
+        </article>
+        <div class="small muted" style="margin-top:26px;max-width:620px;border-top:1px solid var(--line);padding-top:14px">
+          Nothing on this page tells you which companies it touches. Look them up.
+        </div>
+      </div>
+    </div>`;
+  }
+
+  const lead = items.find(x => !x.filler);
+  const rest = items.filter(x => x !== lead);
+
+  return `<div class="site quill">
+    <div class="masthead"><h1>The Wire</h1>
+      <div class="sub">Aggregated from everything you subscribe to</div></div>
+    <div class="navbar">
+      <span class="lnk ${filter==="all"?"on":""}" data-newsfilter="all">Everything</span>
+      <span class="lnk ${filter==="significant"?"on":""}" data-newsfilter="significant">Significant only</span>
+      <span class="lnk ${filter==="today"?"on":""}" data-newsfilter="today">Today</span>
+      <span class="lnk" data-go="quillstreet.com/markets">Markets</span>
+    </div>
+    <div class="wrap">
+      ${!items.length ? '<div class="muted" style="padding:40px 0">Nothing has printed yet. The wire runs during market hours.</div>' : ""}
+      ${lead ? `<div class="lead" data-news="${lead.n}">
+        ${lead.tag ? `<div class="tagpill ${lead.tag === "BREAKING" ? "brk" : "imp"}">${esc(lead.tag)}</div>` : ""}
+        <h2>${esc(lead.head)}</h2>
+        <div class="byline">By ${esc(lead.author)} &middot; ${esc(lead.outletName)} &middot; day ${lead.day}, ${tickClock(lead.tick)}</div>
+        <p>${esc(excerpt(lead.body[0] || "", 220))}&hellip;</p>
+      </div>` : ""}
+      <div class="feed">
+        ${rest.map(x => x.filler ? `
+          <div class="fillerrow" data-news="${x.n}">
+            <span class="src">${esc(x.outletName)}</span>
+            <span class="hd">${esc(x.head)}</span>
+            <span class="tm">day ${x.day}</span>
+          </div>` : `
+          <div class="storyrow ${x.read ? "" : "fresh"}" data-news="${x.n}">
+            <div>
+              ${x.tag ? `<span class="tagpill sm ${x.tag === "BREAKING" ? "brk" : "imp"}">${esc(x.tag)}</span>` : ""}
+              <span class="hd">${esc(x.head)}</span>
+            </div>
+            <div class="meta">${esc(x.outletName)} &middot; ${esc(x.author)} &middot; day ${x.day}, ${tickClock(x.tick)}</div>
+          </div>`).join("")}
+      </div>
+    </div>
+    ${checklistHTML()}
+  </div>`;
+}
+
+function renderIndex(){
+  const ix = S.indices[S.openIndex] || S.indices.STR;
+  const c = idxPct(ix);
+  const members = ix.members.map(t => S.assets[t]).filter(Boolean);
+  const ranked = members.slice().sort((a, b) =>
+    (ix.weight === "price" ? b.price - a.price : marketCap(b) - marketCap(a)));
+  const total = ranked.reduce((t, a) => t + (ix.weight === "price" ? a.price : marketCap(a)), 0);
+
+  return `<div class="site quill">
+    <div class="masthead"><h1>${esc(ix.name)}</h1>
+      <div class="sub">${esc(ix.symbol)} &middot; ${ix.weight === "price" ? "price-weighted" : "capitalisation-weighted"} &middot; ${members.length} constituents &middot; since ${ix.inception}</div></div>
+    <div class="navbar"><span class="lnk" data-go="quillstreet.com/markets">&larr; Markets</span></div>
+    <div class="wrap">
+      <div style="display:flex;gap:20px;align-items:baseline;margin-bottom:16px;flex-wrap:wrap">
+        <span class="num" style="font-size:34px;font-weight:600;letter-spacing:-1.5px" ${lv("idxval", ix.id)}>${ix.value.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}</span>
+        <span class="num ${cls(c)}" style="font-size:15px" ${lv("idxchg", ix.id)}>${pct(c)}</span>
+      </div>
+      <div class="card" style="max-width:760px">
+        ${rangeBarHTML()}
+        <div class="chartwrap"><canvas id="hist-chart" data-index-chart="${ix.id}"></canvas></div>
+      </div>
+      <p class="small muted" style="max-width:620px;margin:6px 0 22px">${esc(ix.blurb)}</p>
+
+      <h3 style="font:600 13px var(--ui);margin:0 0 8px">Largest constituents by weight</h3>
+      <div class="card" style="max-width:700px"><table>
+        <tr><th>Symbol</th><th>Company</th><th class="r">Weight</th><th class="r">Last</th><th class="r">Change</th></tr>
+        ${ranked.slice(0, 15).map(a => {
+          const w = (ix.weight === "price" ? a.price : marketCap(a)) / total * 100;
+          const ch = (a.price - a.prevClose) / a.prevClose * 100;
+          return `<tr class="row" data-quote="${a.ticker}">
+            <td><b class="lnk">${a.ticker}</b>${a.sector === "ai" ? ' <span class="hot">AI</span>' : ""}</td>
+            <td>${esc(a.name)}</td>
+            <td class="r num">${w.toFixed(2)}%</td>
+            <td class="r num" ${lv("price",a.ticker)}>${money(a.price)}</td>
+            <td class="r num ${cls(ch)}" ${lv("change",a.ticker)}>${pct(ch)}</td></tr>`;
+        }).join("")}
+      </table></div>
+      ${ix.weight === "price" ? `<div class="small muted" style="margin-top:10px;max-width:620px">
+        Weighted by share price, so the most expensive share moves this index most,
+        regardless of how large the company behind it is.</div>` : ""}
+    </div>
+  </div>`;
+}
+
+function renderProfile(){
+  const a = S.assets[S.quote] || S.assets.IVS;
+  const ch = (a.price - a.prevClose) / a.prevClose * 100;
+  const yr = a.history.slice(-CONFIG.daysPerYear);
+  setTimeout(() => step("open_profile"), 0);
+
+  return `<div class="site quill">
+    <div class="masthead">
+      <h1>The Quill Street Journal</h1>
+      <div class="sub">Company Profile</div>
+    </div>
+    <div class="navbar"><span class="lnk" data-go="quillstreet.com/markets">&larr; All quotes</span></div>
+    <div class="wrap">
+      <div style="display:flex;gap:12px;align-items:baseline;flex-wrap:wrap">
+        <h2 style="margin:0;font:400 26px var(--serif);letter-spacing:-.4px">${esc(a.name)}</h2>
+        <b class="num" style="font-size:15px">${a.ticker}</b>
+        <span class="muted small">${esc(SECTORS[a.sector].name)}</span>
+      </div>
+      <div style="display:flex;gap:20px;align-items:baseline;margin:12px 0 18px;flex-wrap:wrap">
+        <span class="num" style="font-size:34px;font-weight:600;letter-spacing:-1.5px"
+              ${lv("price",a.ticker)}>${money(a.price)}</span>
+        <span class="num ${cls(ch)}" style="font-size:15px" ${lv("change",a.ticker)}>${pct(ch)}</span>
+        <span class="small muted num" ${lv("bidaskLong",a.ticker)}>Bid ${money(bidOf(a))} &nbsp; Ask ${money(askOf(a))}</span>
+      </div>
+
+      <div class="card" style="max-width:760px">
+        ${rangeBarHTML()}
+        <div class="chartwrap"><canvas id="hist-chart"></canvas></div>
+      </div>
+      <div class="small muted" style="margin:-4px 0 22px" ${lv("rangenote")}>${rangeNote()}</div>
+
+      <div style="display:flex;gap:28px;align-items:flex-start;flex-wrap:wrap">
+        <article style="flex:2;min-width:300px">
+          <h3>What the business does</h3>
+          <div class="byline">Profile maintained by Quill Street Data Services</div>
+          <p>${esc(a.desc)}</p>
+        </article>
+        <div style="flex:1;min-width:250px">
+          <div class="card"><table>
+            <tr><td class="muted">Sector</td><td class="r">${esc(SECTORS[a.sector].name)}</td></tr>
+            <tr><td class="muted">Headquarters</td><td class="r">${esc(a.hq)}</td></tr>
+            <tr><td class="muted">Chief executive</td><td class="r">${esc(a.ceo)}</td></tr>
+            <tr><td class="muted">Founded</td><td class="r num">${a.founded}</td></tr>
+            <tr><td class="muted">Employees</td><td class="r num">${a.employees.toLocaleString("en-US")}</td></tr>
+            <tr><td class="muted">Shares outstanding</td><td class="r num">${(a.float/1e6).toFixed(1)}M</td></tr>
+            <tr><td class="muted">Dividend yield</td><td class="r num">${a.div.toFixed(1)}%</td></tr>
+            <tr><td class="muted">Day range</td><td class="r num" ${lv("range",a.ticker)}>${money(a.dayLow)} &ndash; ${money(a.dayHigh)}</td></tr>
+            <tr><td class="muted">Year range</td><td class="r num">${money(Math.min(...yr))} &ndash; ${money(Math.max(...yr))}</td></tr>
+            <tr><td class="muted">Volume</td><td class="r num" ${lv("vol",a.ticker)}>${a.volume.toLocaleString("en-US")}</td></tr>
+          </table></div>
+          <button class="primary" data-trade="${a.ticker}">Trade ${a.ticker} at ${esc(broker().name)}</button>
+        </div>
+      </div>
+    </div>
+    ${checklistHTML()}
+  </div>`;
+}
+
+function renderTugmore(){
+  const a = S.assets[S.watchSel];
+  const ch = (a.price - a.prevClose) / a.prevClose * 100;
+  const open = S.phase === "open";
+  const held = holding(S.watchSel);
+  const firms = availableBrokers();
+  const list = listedAssets();
+
+  const posRows = S.positions.map(p => {
+    const pa = S.assets[p.ticker], q = pnlOf(p);
+    return `<tr class="row" data-watch="${p.ticker}">
+      <td><b>${p.ticker}</b><div class="small muted">${esc(pa.name)}</div></td>
+      <td class="r num">${p.shares.toFixed(4)}</td>
+      <td class="r num">${money(p.costBasis)}</td>
+      <td class="r num" ${lv("poslast", p.ticker)}>${money(q.bid)}</td>
+      <td class="r num" ${lv("posvalue", p.ticker)}>${money(q.value)}</td>
+      <td class="r num ${cls(q.pnl)}" ${lv("pospnl", p.ticker)}>${money(q.pnl)}</td>
+      <td class="r"><button class="mini" data-sellone="${p.ticker}" ${open ? "" : "disabled"}>Sell</button></td>
+    </tr>`;
+  }).join("");
+
+  const posBox = S.positions.length ? `<table>
+      <tr><th>Symbol</th><th class="r">Shares</th><th class="r">Cost</th>
+          <th class="r">Last</th><th class="r">Value</th><th class="r">Open P/L</th><th></th></tr>
+      ${posRows}
+    </table>
+    <div class="small muted" style="padding:11px 15px">
+      ${S.positions.length} of ${slotCount()} slot${slotCount() === 1 ? "" : "s"} in use.
+      Open P/L is after both commissions and assumes you sell at the bid.
+    </div>`
+    : `<div class="body muted">No open positions. Your account supports
+       ${slotCount()} at a time.</div>`;
+
+  // The watch list is the four starters at tier 1; at tier 2 it becomes your
+  // holdings plus whatever you are looking at, because a hundred names in a
+  // sidebar is not a watch list, it is a phone book.
+  const watch = S.tier >= 2
+    ? [...new Set([...S.positions.map(p => p.ticker), S.watchSel])].map(t => S.assets[t])
+    : list;
+
+  return `<div class="site tug">
+    <div class="bar"><b>${esc(broker().name)}</b><span class="sm">Self-Directed Investing &middot; Member SIPC</span></div>
+    <div class="tabs"><div class="on">Trade</div><div>Accounts</div><div>Research</div><div>Service</div></div>
+    <div class="grid">
+
+      <div>
+        <div class="card"><h3>Account</h3><div class="body">
+          <div class="small muted">Individual &middot; 4417</div>
+          <div class="num" style="font-size:20px;font-weight:600;margin-top:4px" ${lv("cash")}>${money(S.cash)}</div>
+          <div class="small muted">Cash available</div>
+          ${firms.length > 1 ? `
+            <label class="small muted" style="display:block;margin:13px 0 5px">Trading through</label>
+            <select id="t-broker" style="width:100%">
+              ${firms.map(f => `<option value="${f.id}" ${f.id === S.broker ? "selected" : ""}>${esc(f.name)}</option>`).join("")}
+            </select>
+            <div class="small muted" style="margin-top:6px">${esc(broker().note)}</div>` : ""}
+        </div></div>
+
+        <div class="card"><h3>${S.tier >= 2 ? "Holdings" : "Watch list"}</h3><div class="navlist">
+          ${watch.map(x => {
+            const c = (x.price - x.prevClose) / x.prevClose * 100;
+            return `<div class="${x.ticker === S.watchSel ? "on" : ""}" data-watch="${x.ticker}">
+              <b>${x.ticker}</b>
+              <span class="num ${cls(c)}" style="float:right" ${lv("change",x.ticker)}>${pct(c)}</span></div>`;
+          }).join("")}
+        </div></div>
+      </div>
+
+      <div>
+        <div class="card">
+          <div class="quote-row">
+            <div><b style="font-size:14px">${a.ticker}</b>
+              <div class="small muted">${esc(a.name)}</div></div>
+            <div class="big ${cls(ch)}" ${lv("price",a.ticker)}>${money(a.price)}</div>
+            <div class="num ${cls(ch)}" ${lv("change",a.ticker)}>${pct(ch)}</div>
+            <div class="bidask" ${lv("bidaskLong",a.ticker)}>Bid ${money(bidOf(a))} &nbsp; Ask ${money(askOf(a))}</div>
+          </div>
+          ${rangeBarHTML()}
+          <div class="chartwrap"><canvas id="day-chart"></canvas></div>
+          <div class="statline" ${lv("stats",a.ticker)}>
+            Open ${money(a.open)} &middot; High ${money(a.dayHigh)} &middot; Low ${money(a.dayLow)}
+            &middot; Prev close ${money(a.prevClose)} &middot; Vol ${a.volume.toLocaleString("en-US")}
+          </div>
+        </div>
+        <div class="card"><h3>Positions</h3>${posBox}</div>
+      </div>
+
+      <div>
+        <div class="card"><h3>Order ticket</h3><div class="body ticket">
+          <label>Symbol</label>
+          ${S.tier >= 2
+            ? `<input id="t-sym" value="${esc(S.watchSel)}" spellcheck="false" autocomplete="off">
+               <div class="small muted" style="margin-top:4px">Type a ticker. ${list.length} listed.</div>`
+            : `<select id="t-sym">
+                 ${list.map(x => `<option ${x.ticker === S.watchSel ? "selected" : ""}>${x.ticker}</option>`).join("")}
+               </select>`}
+          <label>Order type</label>
+          <select disabled><option>Market</option></select>
+          <label>Amount to invest (USD)</label>
+          <input id="t-amt" class="num" value="${esc(S.lastAmt || "200")}" inputmode="decimal">
+          <div class="small muted" style="margin-top:6px">Fractional shares. You will be filled at the ask.</div>
+          <div style="display:flex;gap:7px;margin-top:14px">
+            <button class="primary" id="t-buy" ${open && !held && S.positions.length < slotCount() ? "" : "disabled"}>Buy</button>
+            <button id="t-sell" ${open && held ? "" : "disabled"}>Sell ${esc(S.watchSel)}</button>
+          </div>
+          <div class="small muted" style="margin-top:10px">
+            ${fee() ? `Commission ${money(fee())} each way.` : "No commission at this firm."}<br>
+            <span ${lv("phasetext")}>${open ? "Market open." : "Market closed \u2014 orders resume at the next open."}</span>
+          </div>
+          ${S.lastError ? `<div class="err">${esc(S.lastError)}</div>` : ""}
+          ${S.lastOk ? `<div class="ok">${esc(S.lastOk)}</div>` : ""}
+        </div></div>
+
+        <div class="card"><h3>Session</h3><div class="body small">
+          <div>Phase: <b ${lv("phase")}>${open ? "Open" : "Closed \u2014 planning"}</b></div>
+          <div>Time: <span class="num" ${lv("clock")}>${clockLabel()}</span></div>
+          <div>Tick <span class="num" ${lv("tickcount")}>${S.tick} of ${CONFIG.ticksPerDay}</span></div>
+          <div style="margin-top:12px">
+            ${open ? `<button id="btn-skipday">Skip the rest of the day</button>`
+                   : `<button class="primary" id="btn-openday">Open the market</button>`}
+          </div>
+        </div></div>
+      </div>
+    </div>
+    ${checklistHTML()}
+  </div>`;
+}
+
+function renderBank(){
+  return `<div class="site ckh">
+    <div class="crest">
+      <div class="seal">C&amp;H</div>
+      <div><h1>COCKBURN &amp; HOARE</h1><div class="est">SAVINGS &amp; TRUST &middot; EST. 1856</div></div>
+    </div>
+    <div class="wrap">
+      <div class="card"><h3>Deposit account &middot; 8812</h3><table>
+        <tr><td class="muted">Available balance</td><td class="r num"><b>${money(0)}</b></td></tr>
+        <tr><td class="muted">Annual rate</td><td class="r num">1.10%</td></tr>
+        <tr><td class="muted">Interest credited</td><td class="r num">Quarterly</td></tr>
+        <tr><td class="muted">Days held</td><td class="r num">0</td></tr>
+        <tr><td class="muted">Bonus rate at 30 days</td><td class="r num">+0.35%</td></tr>
+      </table>
+      <div class="body small muted">
+        Transfers between your deposit account and your brokerage are available after the close.
+        Your cash is presently held at Tugmore Direct.
+      </div></div>
+      <div class="photo">[ photograph: a family of four on a porch, mid-afternoon ]</div>
+      <div class="small muted" style="margin-top:16px">
+        Cockburn &amp; Hoare Savings &amp; Trust is a partnership. Deposits are insured to the
+        applicable statutory limit. Rates are subject to change without notice and frequently are.
+      </div>
+    </div>
+  </div>`;
+}
+
+function capLabel(a){
+  const c = marketCap(a);
+  if (c >= 1e12) return "$" + (c / 1e12).toFixed(2) + "T";
+  if (c >= 1e9)  return "$" + (c / 1e9).toFixed(1) + "B";
+  return "$" + (c / 1e6).toFixed(0) + "M";
+}
+
+function checklistHTML(){
+  if (S.tier !== 1) return "";
+  return `<div class="chk">
+    <h3>Getting started &middot; ${stepsDone()} of ${STEPS.length}</h3>
+    <ol>${STEPS.map(s => `<li class="${S.tutorial[s.id] ? "done" : ""}">${s.label}</li>`).join("")}</ol>
+  </div>`;
+}
+
+/* ===========================================================================
+   6. LIVE UPDATE
+
+   The whole reason the page is usable while the market ticks. Rewrites only
+   the numbers, so open dropdowns, focus and half-typed input all survive.
+   ======================================================================== */
+function liveUpdate(){
+  const nodes = document.querySelectorAll("#viewport [data-lv]");
+  for (const el of nodes){
+    const kind = el.dataset.lv;
+    const a = el.dataset.t ? S.assets[el.dataset.t] : null;
+    if (el.dataset.t && !a && kind !== "idxval" && kind !== "idxchg") continue;
+    const ch = a ? (a.price - a.prevClose) / a.prevClose * 100 : 0;
+
+    switch (kind){
+      case "price":
+        el.textContent = money(a.price);
+        if (el.classList.contains("big")) setTone(el, ch, "big");
+        break;
+      case "change":
+        el.textContent = pct(ch); setTone(el, ch, "num"); break;
+      case "bidask":
+        el.textContent = `${money(bidOf(a))} / ${money(askOf(a))}`; break;
+      case "bidaskLong":
+        el.textContent = `Bid ${money(bidOf(a))}   Ask ${money(askOf(a))}`; break;
+      case "vol":
+        el.textContent = a.volume.toLocaleString("en-US"); break;
+      case "range":
+        el.textContent = `${money(a.dayLow)} – ${money(a.dayHigh)}`; break;
+      case "stats":
+        el.textContent = `Open ${money(a.open)} · High ${money(a.dayHigh)} `
+                       + `· Low ${money(a.dayLow)} · Prev close ${money(a.prevClose)} `
+                       + `· Vol ${a.volume.toLocaleString("en-US")}`;
+        break;
+      case "cash":     el.textContent = money(S.cash); break;
+      case "clock":    el.textContent = clockLabel(); break;
+      case "tickcount":el.textContent = `${S.tick} of ${CONFIG.ticksPerDay}`; break;
+      case "phase":    el.textContent = S.phase === "open" ? "Open" : "Closed — planning"; break;
+      case "phasetext":el.textContent = S.phase === "open" ? "Market open."
+                         : "Market closed — orders resume at the next open."; break;
+      case "cap": el.textContent = capLabel(a); break;
+      case "idxval": { const ix = S.indices[el.dataset.t];
+        if (ix) el.textContent = ix.value.toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}); break; }
+      case "idxchg": { const ix = S.indices[el.dataset.t];
+        if (ix){ const c = idxPct(ix); el.textContent = pct(c); setTone(el, c, "num"); } break; }
+      case "rangenote": el.textContent = rangeNote(); break;
+      case "poslast": { const h = holding(el.dataset.t); if (h) el.textContent = money(pnlOf(h).bid); break; }
+      case "posvalue":{ const h = holding(el.dataset.t); if (h) el.textContent = money(pnlOf(h).value); break; }
+      case "pospnl":  { const h = holding(el.dataset.t);
+                        if (h){ const q = pnlOf(h); el.textContent = money(q.pnl); setTone(el, q.pnl, "num"); } break; }
+    }
+  }
+  paintStatus();
+}
+function setTone(el, n, base){
+  el.className = `${base} ${cls(n)}`;
+}
+
+/* ===========================================================================
+   7. CHARTS
+
+   Drawn at device resolution so the line is actually sharp, and fed from real
+   retained data rather than only the current session. Five ranges, each with
+   its own source:
+
+     1H   the last in-game hour of ticks, crossing into yesterday if need be
+     1D   this session, tick by tick
+     1W   five trading days of ticks, stitched
+     1Y   forty daily closes
+     MAX  every close there is, invented past included
+   ======================================================================== */
+const TICKS_PER_HOUR =
+  Math.round(CONFIG.ticksPerDay / ((CONFIG.closeMinute - CONFIG.openMinute) / 60));
+
+const RANGES = [
+  { id:"1H",  label:"1H"  },
+  { id:"1D",  label:"1D"  },
+  { id:"1W",  label:"1W"  },
+  { id:"1Y",  label:"1Y"  },
+  { id:"5Y",  label:"5Y"  },
+  { id:"MAX", label:"Max" },
+];
+
+/* Recent sessions plus the live one, flattened, newest last. */
+function flatTicks(a, days){
+  const take = a.sessions.slice(-Math.max(0, days - 1));
+  const prices = [], vols = [], marks = [];
+  for (const s of take){
+    marks.push({ i:prices.length, day:s.day });
+    prices.push(...s.prices); vols.push(...s.vols);
+  }
+  if (a.intraday.length){
+    marks.push({ i:prices.length, day:S.day });
+    prices.push(...a.intraday); vols.push(...a.intradayVol);
+  }
+  return { prices, vols, marks };
+}
+
+function seriesFor(a, range){
+  if (!a.sessions){                       // an index: closes and this session only
+    if (range === "1Y" || range === "5Y" || range === "MAX"){
+      const n = range === "1Y" ? CONFIG.daysPerYear
+              : range === "5Y" ? CONFIG.daysPerYear * 5 : a.history.length;
+      const prices = a.history.slice(-n);
+      return { prices, vols:null, kind:"day", firstDay:S.day - prices.length, ref:undefined };
+    }
+    const src = a.intraday.length > 1 ? a.intraday : a.history.slice(-2);
+    const n = range === "1H" ? Math.min(TICKS_PER_HOUR, src.length) : src.length;
+    return { prices:src.slice(-n), vols:null, kind:"tick", span:"day",
+             startTick:Math.max(0, S.tick - n + 1), ref:a.prevClose };
+  }
+  if (range === "1Y" || range === "5Y" || range === "MAX"){
+    const n = range === "1Y" ? CONFIG.daysPerYear
+            : range === "5Y" ? CONFIG.daysPerYear * 5 : a.history.length;
+    const prices = a.history.slice(-n), vols = a.histVol.slice(-n);
+    return { prices, vols, kind:"day", firstDay: S.day - prices.length, ref:undefined };
+  }
+  if (range === "1W"){
+    const f = flatTicks(a, 5);
+    return { ...f, kind:"tick", span:"week", ref:undefined };
+  }
+  if (range === "1H"){
+    const f = flatTicks(a, 2);
+    const n = Math.min(TICKS_PER_HOUR, f.prices.length);
+    return { prices:f.prices.slice(-n), vols:f.vols.slice(-n), kind:"tick", span:"hour",
+             startTick: Math.max(0, S.tick - n + 1), ref:undefined };
+  }
+  // 1D
+  const src = a.intraday.length > 1 ? a
+            : (a.sessions.length ? a.sessions[a.sessions.length - 1] : a);
+  const prices = src.prices || a.intraday, vols = src.vols || a.intradayVol;
+  return { prices, vols, kind:"tick", span:"day", startTick:0, ref:a.prevClose };
+}
+
+/* Even-stride downsample that always keeps the first and last point, so the
+   latest price is never a stale sample. */
+function downsample(arr, max){
+  if (arr.length <= max) return { data:arr, stride:1 };
+  const stride = Math.ceil(arr.length / max), out = [];
+  for (let i = 0; i < arr.length; i += stride) out.push(arr[i]);
+  if (out[out.length - 1] !== arr[arr.length - 1]) out.push(arr[arr.length - 1]);
+  return { data:out, stride };
+}
+
+function sizeCanvas(cv, cssW, cssH){
+  const dpr = window.devicePixelRatio || 1;
+  cv.style.width = cssW + "px";
+  cv.style.height = cssH + "px";
+  cv.width = Math.round(cssW * dpr);
+  cv.height = Math.round(cssH * dpr);
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  return ctx;
+}
+
+function mountChart(cv, ticker, height){
+  cv._ticker = ticker;
+  cv._index = cv.dataset.indexChart || null;
+  cv._height = height;
+  if (!cv._wired){
+    cv._wired = true;
+    cv.addEventListener("mousemove", e => {
+      const r = cv.getBoundingClientRect();
+      cv._hoverX = e.clientX - r.left;
+      drawChart(cv);
+    });
+    cv.addEventListener("mouseleave", () => { cv._hoverX = null; drawChart(cv); });
+  }
+  drawChart(cv);
+}
+
+function drawChart(cv){
+  const a = cv._index ? S.indices[cv._index] : S.assets[cv._ticker];
+  if (!a) return;
+  const box = cv.parentElement;
+  const cssW = Math.max(280, (box ? box.clientWidth : 620) - 20);
+  const cssH = cv._height;
+  const ctx = sizeCanvas(cv, cssW, cssH);
+
+  const spec = seriesFor(a, S.range);
+  let raw = spec.prices;
+  if (!raw || !raw.length) raw = [a.price];
+  if (raw.length === 1) raw = [raw[0], raw[0]];
+
+  const ds = downsample(raw, CONFIG.chartMaxPoints);
+  const series = ds.data;
+  const vols = spec.vols && spec.vols.length
+    ? downsample(spec.vols, CONFIG.chartMaxPoints).data : null;
+
+  const pad = { l:8, r:62, t:12, b:22 };
+  const volH = vols ? 40 : 0;
+  const plotH = cssH - pad.t - pad.b - volH;
+  const plotW = cssW - pad.l - pad.r;
+
+  let lo = Math.min(...series), hi = Math.max(...series);
+  if (spec.ref !== undefined){ lo = Math.min(lo, spec.ref); hi = Math.max(hi, spec.ref); }
+
+  /* Over a century a linear axis renders the first fifty years as a flat line
+     on the floor, so anything spanning more than an eightfold move gets a log
+     axis. Decide that on the real range, before any padding. */
+  const useLog = lo > 0 && hi / lo > 8;
+
+  if (useLog){
+    lo /= 1.10; hi *= 1.10;              // pad multiplicatively, or the floor
+  } else {                                // collapses to nothing on a log scale
+    const span = (hi - lo) || hi * 0.01 || 1;
+    lo -= span * 0.12; hi += span * 0.12;
+    lo = Math.max(lo, 0);                 // a price is never negative
+  }
+  const lLo = Math.log(Math.max(lo, 1e-9)), lHi = Math.log(Math.max(hi, 1e-8));
+
+  const X = i => pad.l + plotW * (series.length === 1 ? 0 : i / (series.length - 1));
+  const Y = v => useLog
+    ? pad.t + plotH * (1 - (Math.log(Math.max(v, lo)) - lLo) / (lHi - lLo))
+    : pad.t + plotH * (1 - (v - lo) / (hi - lo));
+
+  ctx.clearRect(0, 0, cssW, cssH);
+  ctx.fillStyle = "#fff"; ctx.fillRect(0, 0, cssW, cssH);
+
+  /* gridlines and the price scale, on the right like every real terminal */
+  ctx.font = '11px ui-monospace,Menlo,monospace';
+  ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  const axisLabelFor = v => v >= 10000 ? Math.round(v).toLocaleString("en-US")
+                          : v >= 100 ? v.toFixed(0) : v.toFixed(2);
+  for (let i = 0; i <= 4; i++){
+    const v = useLog ? Math.exp(lLo + (lHi - lLo) * i / 4) : lo + (hi - lo) * i / 4;
+    const y = Math.round(Y(v)) + 0.5;
+    ctx.strokeStyle = "#f1f3f4"; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(cssW - pad.r, y); ctx.stroke();
+    ctx.fillStyle = "#9aa0a6";
+    ctx.fillText(axisLabelFor(v), cssW - pad.r + 8, y);
+  }
+  if (useLog){
+    ctx.fillStyle = "#bdc1c6"; ctx.font = '9.5px var(--ui)'; ctx.textAlign = "right";
+    ctx.fillText("log", cssW - pad.r - 6, pad.t + 9);
+    ctx.font = '11px ui-monospace,Menlo,monospace'; ctx.textAlign = "left";
+  }
+
+  /* previous close, where it means something */
+  if (spec.ref !== undefined){
+    const y = Math.round(Y(spec.ref)) + 0.5;
+    ctx.save();
+    ctx.setLineDash([4, 4]); ctx.strokeStyle = "#bdc1c6";
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(cssW - pad.r, y); ctx.stroke();
+    ctx.restore();
+  }
+
+  /* day boundaries on the week view */
+  if (spec.span === "week" && spec.marks){
+    ctx.save(); ctx.strokeStyle = "#e8eaed"; ctx.setLineDash([2, 3]);
+    ctx.textAlign = "center"; ctx.fillStyle = "#bdc1c6"; ctx.font = '10px var(--ui)';
+    for (const m of spec.marks){
+      if (!m.i) continue;
+      const x = Math.round(X(Math.floor(m.i / ds.stride))) + 0.5;
+      ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + plotH); ctx.stroke();
+      ctx.fillText("Day " + m.day, x, cssH - 8);
+    }
+    ctx.restore();
+  }
+
+  /* volume */
+  if (vols){
+    const vmax = Math.max(...vols) || 1;
+    ctx.fillStyle = "#eceef0";
+    const bw = Math.max(1, plotW / vols.length - 0.5);
+    for (let i = 0; i < vols.length; i++){
+      const h = (vols[i] / vmax) * (volH - 8);
+      ctx.fillRect(X(i) - bw / 2, cssH - pad.b - h, bw, h);
+    }
+  }
+
+  const base = spec.ref !== undefined ? spec.ref : series[0];
+  const last = series[series.length - 1];
+  const rising = last >= base;
+  const line = rising ? "#137333" : "#c5221f";
+
+  /* soft area under the line */
+  const grad = ctx.createLinearGradient(0, pad.t, 0, pad.t + plotH);
+  grad.addColorStop(0, rising ? "rgba(19,115,51,.14)" : "rgba(197,34,31,.14)");
+  grad.addColorStop(1, "rgba(255,255,255,0)");
+  ctx.beginPath();
+  ctx.moveTo(X(0), pad.t + plotH);
+  series.forEach((v, i) => ctx.lineTo(X(i), Y(v)));
+  ctx.lineTo(X(series.length - 1), pad.t + plotH);
+  ctx.closePath();
+  ctx.fillStyle = grad; ctx.fill();
+
+  /* the line itself */
+  ctx.strokeStyle = line; ctx.lineWidth = 1.6;
+  ctx.lineJoin = "round"; ctx.lineCap = "round";
+  ctx.beginPath();
+  series.forEach((v, i) => i ? ctx.lineTo(X(i), Y(v)) : ctx.moveTo(X(i), Y(v)));
+  ctx.stroke();
+
+  /* last price, marked and labelled against the scale */
+  const ly = Y(last);
+  ctx.beginPath(); ctx.arc(X(series.length - 1), ly, 3, 0, Math.PI * 2);
+  ctx.fillStyle = line; ctx.fill();
+  const lbl = last >= 10000 ? Math.round(last).toLocaleString("en-US") : last.toFixed(2);
+  ctx.font = '11px ui-monospace,Menlo,monospace';
+  const lw = ctx.measureText(lbl).width + 12;
+  ctx.fillStyle = line;
+  roundRect(ctx, cssW - pad.r + 3, ly - 9, lw, 18, 3); ctx.fill();
+  ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+  ctx.fillText(lbl, cssW - pad.r + 9, ly);
+
+  /* time axis */
+  ctx.fillStyle = "#bdc1c6"; ctx.font = '10px var(--ui)';
+  ctx.textBaseline = "alphabetic";
+  if (spec.span !== "week"){
+    ctx.textAlign = "left";
+    ctx.fillText(axisLabel(spec, 0, raw.length), pad.l, cssH - 8);
+    ctx.textAlign = "right";
+    ctx.fillText(axisLabel(spec, raw.length - 1, raw.length), cssW - pad.r, cssH - 8);
+  }
+
+  /* crosshair */
+  if (cv._hoverX != null && cv._hoverX > pad.l && cv._hoverX < cssW - pad.r){
+    const i = Math.max(0, Math.min(series.length - 1,
+      Math.round((cv._hoverX - pad.l) / plotW * (series.length - 1))));
+    const x = Math.round(X(i)) + 0.5, y = Y(series[i]);
+    ctx.save();
+    ctx.strokeStyle = "#9aa0a6"; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(x, pad.t); ctx.lineTo(x, pad.t + plotH); ctx.stroke();
+    ctx.restore();
+    ctx.beginPath(); ctx.arc(x, y, 3.5, 0, Math.PI * 2);
+    ctx.fillStyle = "#fff"; ctx.fill();
+    ctx.strokeStyle = line; ctx.lineWidth = 2; ctx.stroke();
+
+    const chg = (series[i] - base) / base * 100;
+    const val = cv._index
+      ? series[i].toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})
+      : money(series[i]);
+    const txt = `${val}   ${pct(chg)}`;
+    const sub = axisLabel(spec, i * ds.stride, raw.length);
+    ctx.font = '11px ui-monospace,Menlo,monospace';
+    const w = Math.max(ctx.measureText(txt).width, ctx.measureText(sub).width) + 18;
+    const bx = Math.min(Math.max(pad.l, x - w / 2), cssW - pad.r - w);
+    ctx.fillStyle = "rgba(32,33,36,.92)";
+    roundRect(ctx, bx, pad.t + 2, w, 36, 5); ctx.fill();
+    ctx.fillStyle = "#fff"; ctx.textAlign = "left"; ctx.textBaseline = "middle";
+    ctx.fillText(txt, bx + 9, pad.t + 13);
+    ctx.fillStyle = "#9aa0a6"; ctx.font = '10px var(--ui)';
+    ctx.fillText(sub, bx + 9, pad.t + 28);
+  }
+}
+
+function roundRect(ctx, x, y, w, h, r){
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function tickClock(t){
+  const sp = CONFIG.closeMinute - CONFIG.openMinute;
+  const m = CONFIG.openMinute + Math.floor(sp * (t / CONFIG.ticksPerDay));
+  return `${String(Math.floor(m/60)).padStart(2,"0")}:${String(m%60).padStart(2,"0")}`;
+}
+
+function axisLabel(spec, i, total){
+  if (spec.kind === "day") return gameDate(spec.firstDay + i + 1).label;
+  if (spec.span === "hour") return tickClock((spec.startTick || 0) + i);
+  if (spec.span === "week"){
+    let day = S.day, off = i;
+    if (spec.marks) for (const m of spec.marks) if (i >= m.i) { day = m.day; off = i - m.i; }
+    return `Day ${day}, ${tickClock(off)}`;
+  }
+  return tickClock(i);
+}
+
+function rangeNote(){
+  switch (S.range){
+    case "1H":  return "The last hour of trading, tick by tick.";
+    case "1D":  return "This session, tick by tick. Dashed line is yesterday's close.";
+    case "1W":  return `Up to ${CONFIG.sessionsKept - 1} trading days of ticks, stitched. Dotted lines are the opens.`;
+    case "1Y":  return "Forty daily closes — one in-game year.";
+    case "5Y":  return "Five years of closes.";
+    default: {
+      const ix = S.indices[S.openIndex];
+      if (ix && currentTab().url.indexOf("quillstreet.com/index") === 0)
+        return `Every close since ${ix.inception}. Invented, of course — and the forward drift owes it nothing.`;
+      return "Every close on record. The years before you arrived are invented, and the forward drift owes them nothing.";
+    }
+  }
+}
+
+function rangeBarHTML(){
+  return `<div class="ranges">${RANGES.map(r =>
+    `<button class="rg ${S.range === r.id ? "on" : ""}" data-range="${r.id}">${r.label}</button>`
+  ).join("")}</div>`;
+}
+
+function paintCharts(){
+  const day = document.getElementById("day-chart");
+  if (day) mountChart(day, S.watchSel, 240);
+  const hist = document.getElementById("hist-chart");
+  if (hist) mountChart(hist, S.quote in S.assets ? S.quote : "IVS", 260);
+  // the index page reuses the same canvas id but draws from an index
+  if (hist && hist.dataset.indexChart) drawChart(hist);
+}
+
+/* ===========================================================================
+   8. SHELL
+   ======================================================================== */
+const vp = () => document.getElementById("viewport");
+const currentTab = () => S.tabs[S.activeTab];
+const siteFor = url => SITES[url.split("?")[0]] || SITES["nscrape.com"];
+
+/* True while the player has a field focused, which is the one moment a
+   rebuild must not happen. The address bar does not count: navigating away
+   is supposed to replace the page. */
+function isTyping(){
+  const el = document.activeElement;
+  if (!el) return false;
+  const tag = el.tagName;
+  return (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") && el.id !== "addr";
+}
+
+function go(url){
+  if (!SITES[url.split("?")[0]]){
+    currentTab().url = url;
+    vp().innerHTML = `<div class="site" style="padding:60px 40px;max-width:520px">
+      <h2 style="font:400 22px var(--serif);margin:0 0 10px">This site can't be reached</h2>
+      <p class="muted">Netscrape can't find <b>${esc(url)}</b>. Check the address, or pick
+      something from the bookmarks bar.</p></div>`;
+    paintChrome();
+    return;
+  }
+  currentTab().url = url;
+  S.lastError = S.lastOk = null;
+  render();
+}
+
+function paintChrome(){
+  const tab = currentTab(), site = siteFor(tab.url);
+  document.getElementById("addr").value = tab.url;
+  document.getElementById("repval").textContent = S.rep.toFixed(1);
+  document.title = site.title + " — Exit Liquidity";
+
+  document.getElementById("tabstrip").innerHTML =
+    S.tabs.map((t, i) => {
+      const s = siteFor(t.url);
+      return `<div class="tab ${i === S.activeTab ? "on" : ""}" data-tab="${i}">
+        <span class="fav">${s.fav}</span><span class="lbl">${esc(s.title)}</span></div>`;
+    }).join("") + `<div class="newtab">+</div>`;
+
+  const unread = S.mail.filter(m => !m.read).length;
+  const freshNews = S.news.filter(x => !x.read && !x.filler).length;
+  document.getElementById("bookmarks").innerHTML = BOOKMARKS.map(b =>
+    `<span class="bm" data-go="${b.url}">
+       <span class="fav" style="background:${b.color}">${b.fav}</span>${esc(b.label)}
+       ${(b.mail && unread) || (b.news && freshNews) ? '<span class="dot"></span>' : ""}</span>`).join("");
+}
+
+function paintStatus(){
+  const d = gameDate(S.day), open = S.phase === "open";
+  document.getElementById("st-dot").className = "dotlive" + (open ? "" : " shut");
+  document.getElementById("st-phase").textContent = open ? "Market open" : "Closed — planning";
+  document.getElementById("st-clock").textContent = clockLabel();
+  document.getElementById("st-date").textContent = `${d.label} · day ${S.day}`;
+  document.getElementById("st-ver").textContent = `Net worth hidden · v${CONFIG.version}`;
+}
+
+function render(){
+  if (!S) return;
+  paintChrome();
+  vp().innerHTML = siteFor(currentTab().url).render();
+  paintCharts();
+  paintStatus();
+  paintTape();
+}
+
+/* ticker tape — the one piece of motion in the build */
+let tapeRunning = false;
+function paintTape(){
+  const el = document.getElementById("tape");
+  const cells = listedAssets().slice(0, 14).map(a => {
+    const ch = (a.price - a.prevClose) / a.prevClose * 100;
+    const k = ch > 0 ? "u" : ch < 0 ? "d" : "";
+    const arrow = ch > 0 ? "▲" : ch < 0 ? "▼" : "▬";
+    return `<span class="sym">${a.ticker}</span> <span class="${k}">${a.price.toFixed(2)} ${arrow} ${pct(ch)}</span>`;
+  });
+  const run = cells.join(" &nbsp;&nbsp;&middot;&nbsp;&nbsp; ") + " &nbsp;&nbsp;&middot;&nbsp;&nbsp; ";
+  el.innerHTML = run + run + run;
+  if (!tapeRunning){
+    tapeRunning = true;
+    let x = 0;
+    (function loop(){
+      x -= 0.5;
+      if (Math.abs(x) > el.scrollWidth / 3) x = 0;
+      el.style.transform = `translateX(${x}px)`;
+      requestAnimationFrame(loop);
+    })();
+  }
+}
+
+let flashTimer = null;
+function flash(msg){
+  const el = document.getElementById("st-hint");
+  if (!el) return;
+  el.textContent = msg;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => { el.textContent = ""; }, 2600);
+}
+
+/* -- dialogs ------------------------------------------------------------- */
+function dialog(title, bodyHTML, buttons){
+  const root = document.getElementById("modal-root");
+  root.innerHTML = `<div class="veil"><div class="dlg">
+    <div class="tb">${esc(title)}</div>
+    <div class="bd">${bodyHTML}</div>
+    <div class="ft">${buttons.map((b, i) =>
+      `<button class="${i === 0 ? "primary" : ""}" data-dlg="${i}">${esc(b.label)}</button>`).join("")}</div>
+  </div></div>`;
+  root.querySelectorAll("[data-dlg]").forEach(b =>
+    b.onclick = () => { const f = buttons[+b.dataset.dlg].fn; closeDialog(); if (f) f(); });
+}
+const closeDialog = () => { document.getElementById("modal-root").innerHTML = ""; };
+
+function showGameMenu(){
+  S.paused = true;                                  // the menu pauses everything
+  const mins = Math.floor(S.realTimePlayed / 60);
+  dialog("Game", `
+    <dl>
+      <dt>Net worth</dt><dd>${money(netWorth())}</dd>
+      <dt>Time in this save</dt><dd>${Math.floor(mins/60)}h ${mins%60}m</dd>
+    </dl>
+    <div style="margin-top:16px">
+      <div class="small muted" style="margin-bottom:6px">Save code &mdash; copy this somewhere safe.</div>
+      <textarea id="savecode" spellcheck="false">${saveCode()}</textarea>
+      <div style="display:flex;gap:7px;margin-top:8px">
+        <button id="sc-load">Load the code above</button>
+        <button id="sc-reset">Start over</button>
+      </div>
+    </div>
+    <div style="margin-top:18px" class="small">
+      <div class="muted" style="margin-bottom:5px">Playtest aid &mdash; not part of the finished game.</div>
+      Tick speed
+      <select id="speed" style="margin-left:6px">
+        <option value="3000">3.0s &mdash; ten-minute day</option>
+        <option value="1000">1.0s</option>
+        <option value="300">0.3s</option>
+        <option value="60">0.06s &mdash; very fast</option>
+      </select>
+    </div>`,
+    [{ label:"Close", fn: () => { S.paused = false; render(); } }]);
+
+  const sel = document.getElementById("speed");
+  sel.value = String(CONFIG.tickMs);
+  sel.onchange = () => { CONFIG.tickMs = +sel.value; restartClock(); };
+  document.getElementById("sc-load").onclick = () => {
+    const ok = loadCode(document.getElementById("savecode").value.trim());
+    closeDialog(); S.paused = false; flash(ok ? "Save loaded." : "That code could not be read."); render();
+  };
+  document.getElementById("sc-reset").onclick = () => {
+    closeDialog();
+    dialog("Start over", "<p>This erases the current career. There is no undo.</p>",
+      [{ label:"Start over", fn: () => { newGame(); S.paused = false; save(); render(); } },
+       { label:"Cancel", fn: () => { S.paused = false; } }]);
+  };
+}
+
+function showTier2(){
+  dialog("Your account has been upgraded", `
+    <p><b>The restrictions on your account have been lifted.</b></p>
+    <p class="small">Word gets around. Several institutions would like your business, the listed
+    universe is considerably larger than four names, and your account now supports more than
+    one position at a time.</p>
+    <p class="small muted" style="border-top:1px solid var(--line);padding-top:14px">
+    A hundred companies are now listed, across twelve sectors, and your account carries three
+    position slots instead of one. Two more brokerages have written to you. The wire covers the
+    whole market from here, not just the four names you started with.</p>`,
+    [{ label:"Close", fn: render }]);
+}
+
+/* -- save / load --------------------------------------------------------- */
+function snapshot(){
+  return {
+    v:1, seed:S.seed, tier:S.tier, day:S.day, tick:S.tick, phase:S.phase,
+    cash:S.cash, rep:S.rep, positions:S.positions, broker:S.broker, tutorial:S.tutorial,
+    tradesMade:S.tradesMade, realTimePlayed:S.realTimePlayed,
+    range:S.range,
+    prices:Object.fromEntries(Object.entries(S.assets).map(([k, a]) => [k, [a.price, a.prevClose]])),
+    // The invented past regenerates identically from the seed, so only the
+    // days actually played need storing. Tick-level sessions are not kept:
+    // they would dwarf everything else in the code, and a reloaded save
+    // rebuilds the week view as it goes.
+    hist:Object.fromEntries(Object.entries(S.assets).map(([k, a]) =>
+      [k, [a.history.slice(a.backfillLen).map(x => +x.toFixed(4)),
+           a.histVol.slice(a.backfillLen)]])),
+    mail:S.mail.slice(0, 20),
+    ixhist:Object.fromEntries(Object.entries(S.indices).map(([k, ix]) =>
+      [k, ix.history.slice(ix.backfillLen).map(x => +x.toFixed(3))])),
+    news:S.news.slice(0, 40),
+    effects:S.effects,
+    schedule:S.schedule,
+  };
+}
+
+/* btoa only speaks Latin-1 and the copy is full of em dashes, so go through
+   UTF-8 both ways. Encoding straight to btoa throws the moment a newsletter
+   lands, which silently produces an empty save code. */
+function b64(str){
+  const bytes = new TextEncoder().encode(str);
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000)
+    s += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
+function unb64(code){
+  const bin = atob(code), bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new TextDecoder().decode(bytes);
+}
+const saveCode = () => { try { return b64(JSON.stringify(snapshot())); } catch { return ""; } };
+function save(){ try { localStorage.setItem(CONFIG.saveKey, JSON.stringify(snapshot())); } catch {} }
+
+function applySnapshot(o){
+  if (!o || o.v !== 1) return false;
+  newGame(o.seed);
+  S.tier = o.tier; S.day = o.day; S.tick = o.tick; S.phase = o.phase;
+  S.cash = o.cash; S.rep = o.rep;
+  S.positions = Array.isArray(o.positions) ? o.positions : (o.position ? [o.position] : []);
+  S.broker = o.broker || "tugmore";
+  S.tutorial = o.tutorial || {}; S.tradesMade = o.tradesMade || 0;
+  S.realTimePlayed = o.realTimePlayed || 0;
+  S.range = o.range || "1D";
+  for (const k in o.hist || {}){
+    const a = S.assets[k]; if (!a) continue;
+    const [closes, vols] = o.hist[k];
+    a.history = a.history.slice(0, a.backfillLen).concat(closes || []);
+    a.histVol = a.histVol.slice(0, a.backfillLen).concat(vols || []);
+  }
+  if (Array.isArray(o.mail) && o.mail.length){
+    S.mail = o.mail;
+    mailSeq = Math.max(0, ...o.mail.map(m => m.id || 0));
+  }
+  for (const k in o.ixhist || {}){
+    const ix = S.indices[k]; if (!ix) continue;
+    ix.history = ix.history.slice(0, ix.backfillLen).concat(o.ixhist[k] || []);
+    ix.histVol = ix.history.map(() => 0);
+    if (ix.history.length) ix.value = ix.prevClose = ix.history[ix.history.length - 1];
+  }
+  if (Array.isArray(o.news)){
+    S.news = o.news;
+    storySeq = Math.max(0, ...o.news.map(x => x.n || 0), 0);
+  }
+  // Effects in flight are restored too: a story that fired this morning is
+  // still working on the price, and losing that on reload would quietly
+  // reverse a trade the player made for a good reason.
+  S.effects = Array.isArray(o.effects) ? o.effects : [];
+  S.schedule = Array.isArray(o.schedule) ? o.schedule : null;
+  for (const k in o.prices || {}){
+    if (!S.assets[k]) continue;
+    S.assets[k].price = o.prices[k][0];
+    S.assets[k].prevClose = o.prices[k][1];
+    S.assets[k].open = o.prices[k][0];
+    S.assets[k].dayHigh = o.prices[k][0];
+    S.assets[k].dayLow = o.prices[k][0];
+    S.assets[k].intraday = [o.prices[k][0]];
+    S.assets[k].intradayVol = [0];
+  }
+  return true;
+}
+function loadCode(code){ try { return applySnapshot(JSON.parse(unb64(code))); } catch { return false; } }
+function loadLocal(){
+  try {
+    const raw = localStorage.getItem(CONFIG.saveKey);
+    return raw ? applySnapshot(JSON.parse(raw)) : false;
+  } catch { return false; }
+}
+
+/* ===========================================================================
+   9. CLOCK + EVENTS + BOOT
+   ======================================================================== */
+let clockHandle = null;
+function restartClock(){
+  clearInterval(clockHandle);
+  clockHandle = setInterval(() => {
+    S.realTimePlayed += CONFIG.tickMs / 1000;
+    if (S.phase !== "open" || S.paused) return;
+    const before = S.phase;
+    stepTick();
+    // A tick never rebuilds the page. It rewrites the numbers and repaints the
+    // chart, so dropdowns stay open and half-typed input survives.
+    if (S.phase === before){ liveUpdate(); paintCharts(); paintTape(); }
+    if (S.tick % 20 === 0) save();
+  }, CONFIG.tickMs);
+}
+
+document.addEventListener("click", e => {
+  const t = e.target.closest("[data-go],[data-tab],[data-mail],[data-quote],[data-watch],[data-sort],[data-trade],[data-range],[data-news],[data-newsfilter],[data-sellone],[data-index]");
+  if (t){
+    if (t.dataset.sellone !== undefined) return sell(t.dataset.sellone);
+    if (t.dataset.index !== undefined){
+      S.openIndex = t.dataset.index; S.openNews = null; return go("quillstreet.com/index");
+    }
+    if (t.dataset.news !== undefined){
+      S.openNews = +t.dataset.news; return go("quillstreet.com/news");
+    }
+    if (t.dataset.newsfilter !== undefined){
+      S.newsFilter = t.dataset.newsfilter; S.openNews = null; return render();
+    }
+    if (t.dataset.range !== undefined){
+      // Swap the range without rebuilding the page, so the order ticket keeps
+      // whatever the player has typed into it.
+      S.range = t.dataset.range;
+      document.querySelectorAll(".rg").forEach(b =>
+        b.classList.toggle("on", b.dataset.range === S.range));
+      paintCharts(); liveUpdate();
+      return;
+    }
+    // Any plain navigation drops the open article, so the bookmark and the
+    // back link both land on the feed rather than on whatever was last read.
+    if (t.dataset.go !== undefined){ S.openNews = null; return go(t.dataset.go); }
+    if (t.dataset.tab !== undefined){ S.activeTab = +t.dataset.tab; return render(); }
+    if (t.dataset.mail !== undefined){ S.openMail = +t.dataset.mail; return render(); }
+    if (t.dataset.quote !== undefined){
+      S.quote = S.watchSel = t.dataset.quote; return go("quillstreet.com/quote");
+    }
+    if (t.dataset.watch !== undefined){ S.watchSel = t.dataset.watch; return render(); }
+    if (t.dataset.trade !== undefined){ S.watchSel = t.dataset.trade; return go("tugmore.com"); }
+    if (t.dataset.sort !== undefined){
+      S.sortDir = (S.sortKey === t.dataset.sort) ? -S.sortDir : 1;
+      S.sortKey = t.dataset.sort; return render();
+    }
+  }
+
+  switch (e.target.id){
+    case "btn-menu": return showGameMenu();
+    case "nav-go": return go(document.getElementById("addr").value.trim());
+    case "nav-reload": return render();
+    case "nav-back": case "nav-fwd": return flash("History is not implemented in this build.");
+    case "q-go": {
+      S.search = document.getElementById("q-search").value;
+      if (S.search.trim()) step("search_ticker");
+      return render();
+    }
+    case "q-clear": S.search = ""; return render();
+    case "t-buy": {
+      S.lastAmt = document.getElementById("t-amt").value;
+      const sym = document.getElementById("t-sym").value.trim().toUpperCase();
+      if (!S.assets[sym]) return fail(`No security listed under "${esc(sym)}".`);
+      S.watchSel = sym;
+      return buy(sym, parseFloat(S.lastAmt));
+    }
+    case "t-sell": return sell(S.watchSel);
+    case "btn-openday": return openDay();
+    case "btn-skipday":
+      return dialog("Skip the rest of the day", `
+        <p>The day runs on without you. Prices move, and anything you hold moves with them.
+        You cannot place or close an order until the next open.</p>
+        <p class="small muted">No fee at this stage of your career.</p>`,
+        [{ label:"Skip", fn: () => { while (S.phase === "open") stepTick(); render(); } },
+         { label:"Cancel" }]);
+  }
+});
+
+/* keep the chart and ticket in step with the symbol dropdown */
+document.addEventListener("change", e => {
+  if (e.target.id === "t-broker"){
+    S.broker = e.target.value;
+    S.lastError = S.lastOk = null;
+    flash(`Routing through ${broker().name}.`);
+    return render();
+  }
+  if (e.target.id === "t-sym"){
+    // Carry the typed amount across the re-render, or picking a different
+    // symbol silently throws away what the player just entered.
+    const amt = document.getElementById("t-amt");
+    if (amt) S.lastAmt = amt.value;
+    S.watchSel = e.target.value;
+    render();
+  }
+});
+
+document.addEventListener("keydown", e => {
+  if (e.key !== "Enter") return;
+  const el = document.activeElement;
+  if (!el) return;
+  if (el.id === "addr") go(el.value.trim());
+  if (el.id === "q-search"){
+    S.search = el.value;
+    if (S.search.trim()) step("search_ticker");
+    render();
+  }
+  if (el.id === "t-amt" && S.phase === "open"){
+    S.lastAmt = el.value;
+    buy(document.getElementById("t-sym").value, parseFloat(el.value));
+  }
+});
+
+/* Charts are sized from their container, so they have to be redrawn when the
+   window changes. Debounced, because resize fires continuously. */
+let resizeTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(paintCharts, 120);
+});
+
+(function boot(){
+  if (!loadLocal()) newGame();
+  render();
+  restartClock();
+  if (S.phase === "closed" && S.day === 1 && S.tick === 0){
+    dialog("Exit Liquidity", `
+      <p>You have five hundred dollars, four dull companies and room for one position at a time.</p>
+      <p class="small">Nothing here will tell you what to do. Your mail is the only instruction you
+      get, and the market never explains itself. Start by reading it.</p>
+      <p class="small muted">A trading day is ten real minutes. The market is closed right now &mdash;
+      open it from the order ticket at Tugmore Direct when you are ready.</p>`,
+      [{ label:"Open the mail", fn: () => go("nscrape.com/mail") }]);
+  }
+})();
+</script>
+</body>
+</html>
